@@ -1,0 +1,65 @@
+<launch>
+
+
+    <arg name="V_MIN" default="0.0" />
+    <param name="V_MIN" value="$(arg V_MIN)" />
+
+    <arg name="V_MAX" default="5.0" />
+    <param name="V_MAX" value="$(arg V_MAX)" />
+
+    <arg name="A_MAX" default="3.0" />
+    <param name="A_MAX" value="$(arg A_MAX)" />
+
+    <arg name="OM_MAX" default="1.0" />
+    <param name="OM_MAX" value="$(arg OM_MAX)" />
+
+    <arg name="DELTA_MAX" default="0.344" />
+    <param name="DELTA_MAX" value="$(arg DELTA_MAX)" />
+
+    <arg name="LF" default="1.105" />
+    <param name="LF" value="$(arg LF)" />
+
+    <arg name="LR" default="1.738" />
+    <param name="LR" value="$(arg LR)" />
+
+    <arg name="MODEL" default="kinematic bicycle" />
+    <param name="MODEL" value="$(arg MODEL)" />
+    
+
+    <node
+        pkg="expert_demo_ros"
+        type="viz_coverage.py"
+        name="environment_visualization"
+    />
+
+    <node
+        pkg="expert_demo_ros"
+        type="viz_robot.py"
+        name="robot_visualization"
+    />
+
+    <node
+        pkg="expert_demo_ros"
+        type="xbox_teleop.py"
+        name="robot_teleop"
+    />
+
+    <node
+        pkg="expert_demo_ros"
+        type="robot_sim_simple_car.py"
+        name="robot_sim"
+    />
+
+    <node pkg="joy" type="joy_node" name="xbox_joystick">
+        <param name="autorepeat_rate" value="30.0" />
+        <param name="deadzone" value="0.2" />
+    </node>
+
+    <node
+        pkg="rviz"
+        type="rviz"
+        name="rviz_visualization"
+        args="-d $(find expert_demo_ros)/rviz/default.rviz"
+    />
+
+</launch>
