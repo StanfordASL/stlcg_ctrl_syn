@@ -118,11 +118,14 @@ def kinematic_bicycle(x, u, dt=0.5, stats=(torch.zeros([1,1,6]), torch.ones([1,1
     a, delta = unstandardize_data(u, μ[:,:,4:], σ[:,:,4:]).split(1, dim=-1)
 
     beta = torch.atan(lr / (lr + lf) * torch.tan(delta.clamp(delta_min, delta_max)))
+
+    tol = 1E-3
+
     
-    psi_new = psi + 0.5 * a * dt**2 * torch.sin(beta) / lr + dt *V * torch.sin(beta) / lr
+    psi_new = psi + (0.5 * a * dt**2 * torch.sin(beta) / lr + dt *V * torch.sin(beta) / lr) * (torch.abs(beta) > tol)
     V_new = (a.clamp(a_min, a_max)*dt + V).clamp(V_min, V_max)
-    x_new = x - lr * torch.sin(beta + psi) / torch.cos(beta) + lr * torch.sin(beta + psi_new) / torch.cos(beta)
-    y_new = y + lr * torch.cos(beta + psi) / torch.cos(beta) - lr * torch.cos(beta + psi_new) / torch.cos(beta)
+    x_new = x + (-lr * torch.sin(beta + psi) / torch.sin(beta) + lr * torch.sin(beta + psi_new) / torch.sin(beta)) * (torch.abs(beta) > tol) + (V * dt + 0.5 * a * dt**2) * torch.cos(psi) * (torch.abs(beta) < tol)
+    y_new = y + (lr * torch.cos(beta + psi) / torch.sin(beta) - lr * torch.cos(beta + psi_new) / torch.sin(beta)) * (torch.abs(beta) > tol) + (V * dt + 0.5 * a * dt**2) * torch.sin(psi) * (torch.abs(beta) < tol)
     # scale
     return standardize_data(torch.cat([x_new, y_new, psi_new, V_new], dim=-1), μ[:,:,:4], σ[:,:,:4])
 
