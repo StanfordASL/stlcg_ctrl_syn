@@ -17,10 +17,16 @@ from torch.utils.tensorboard import SummaryWriter
 from environment import *
 import IPython
 
-value = sio.loadmat('../../hji/data/value.mat');
-deriv_value = sio.loadmat('../../hji/data/deriv_value.mat');
+# value = sio.loadmat('../../hji/data/coverage/value.mat');
+# deriv_value = sio.loadmat('../../hji/data/coverage/deriv_value.mat');
+# V = value['data'];
+# g = sio.loadmat('../../hji/data/coverage/grid.mat')['grid'];
+
+
+value = sio.loadmat('../../hji/data/reach_goal/value.mat');
+deriv_value = sio.loadmat('../../hji/data/reach_goal/deriv_value.mat');
 V = value['data'];
-g = sio.loadmat('../../hji/data/grid.mat')['grid'];
+g = sio.loadmat('../../hji/data/reach_goal/grid.mat')['grid'];
 
 
 values = torch.tensor(V[:,:,:,:,-1]).float()
@@ -29,6 +35,12 @@ points = [torch.from_numpy(g[i][0].flatten()).float() for i in range(4)]
 
 value_interp = RegularGridInterpolator(points, values)
 deriv_interp = [RegularGridInterpolator(points, dV[i][:,:,:,:,-1]) for i in range(4)]
+
+
+def plot_hji_contour():
+    proj = np.min(np.min(V[:,:,:,:,-1], -1), -1)
+    X, Y = np.meshgrid(g[0][0].flatten(), g[1][0].flatten())
+    plt.contourf(X, Y, proj.T, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], alpha=0.5)
 
 class HJIValueFunction(torch.autograd.Function):
 
@@ -356,9 +368,9 @@ class STLPolicy(torch.nn.Module):
         Want the value to be negative (more negative the better)
         '''
         
-        total_value = self.value_func(unstandardize_data(x_traj, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim])).squeeze(-1).sum(0) * self.dt    # [time_dim, bs, 1]
+        total_value = self.value_func(unstandardize_data(x_traj, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim])).squeeze(-1).relu().sum(0) * self.dt    # [time_dim, bs, 1]
 
-        return torch.relu(total_value).mean()
+        return total_value.mean()
 
 
 

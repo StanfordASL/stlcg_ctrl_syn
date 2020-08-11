@@ -41,7 +41,7 @@ addpath(genpath('~/projects/stlcg_ctrl_syn'))
 compTraj = false;
 
 %% Grid
-grid_min = [-5; 0; -pi; 0]; % Lower corner of computation domain
+grid_min = [-5; -2; -pi; 0]; % Lower corner of computation domain
 grid_max = [15; 12; pi; 5];    % Upper corner of computation domain
 N = [41;41;41;21];         % Number of grid points per dimension
 pDim = 3;
@@ -77,16 +77,16 @@ for i=2:traj_length
     visSetIm(gproj, dataproj);
     pause(0.05);
 end
-% disp('Press any button to continue');
-% 
+disp('Press any button to continue');
+
 % waitforbuttonpress;
-% clf
-% [gproj, dataproj] = proj(g, data0, [0,0,1,1], 'min');
-% gproj = processGrid(gproj);
-% scatter(demo_traj(:,1), demo_traj(:,2), '*k')
-% hold on;
-% visSetIm(gproj, dataproj);
-% 
+clf
+[gproj, dataproj] = proj(g, data0, [0,0,1,1], 'min');
+gproj = processGrid(gproj);
+scatter(demo_traj(:,1), demo_traj(:,2), '*k')
+hold on;
+visSetIm(gproj, dataproj);
+
 
 
 %% time vector
@@ -131,8 +131,16 @@ schemeData.dMode = dMode;
 %    {zeros(size(g.xs{1})); zeros(size(g.xs{1})); (g.xs{1}+g.xs{2})/20}; % State-dependent noise
 
 %% If you have obstacles, compute them here
-% R_obs = 0.5;
-% HJIextraArgs.obstacleFunction = shapeSphere(g, [1; 0], R_obs);
+R_obs = 2.5;
+HJIextraArgs.obstacleFunction = shapeSphere(g, [7;7;0;2], R_obs);
+% HJIextraArgs.obstacleFunction = shapeCylinder(g, [0;0;1;1], [7;7;0;0], R_obs);
+i = 4;
+j = 1;
+obs = ones(size(g.xs{1}));
+HJIextraArgs.obstacleFunction = obs .* (sqrt((g.xs{1}(:,:,i,j) - 7).^2 + (g.xs{2}(:,:,i,j) - 7).^2) - R_obs);
+
+% visSetIm(g, obs);
+
 %% Compute value function
 
 %HJIextraArgs.visualize = true; %show plot
@@ -158,12 +166,14 @@ clf
 hold on;
 [gproj, dataproj] = proj(g, data, [0,0,1,1], 'min');
 gOutproj = processGrid(gproj);
-visSetIm(gproj, dataproj);
+visSetIm(gproj, dataproj, 'r', 0);
+visSetIm(gproj, dataproj, 'b', 1);
+visSetIm(gproj, dataproj, 'g', 2);
 
 [gproj, dataproj] = proj(g, data0, [0,0,1,1], 'min');
 gOutproj = processGrid(gproj);
 visSetIm(gproj, dataproj, 'k');
-
+viscircles([7, 7], R_obs)
 %% plotting 
 figure(4);
 clf;
@@ -175,3 +185,12 @@ for i = 1:traj_length
     visSetIm(gproj, dataproj);
 end
     axis equal;
+viscircles([7, 7], R_obs)
+
+%% saving
+grid = g.vs;
+save('data/reach_goal/grid.mat', 'grid');
+save('data/reach_goal/value.mat','data');
+
+[derivC, derivL, derivR] = computeGradients(g, data);
+save('data/reach_goal/deriv_value.mat', 'derivC');

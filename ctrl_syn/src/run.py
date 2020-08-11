@@ -22,7 +22,7 @@ from environment import *
 from src.learning import *
 from learning import *
 from train import train
-
+import IPython
 
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -36,6 +36,8 @@ parser.add_argument('--weight_recon',   type=float, default="1.0",   help="weigh
 parser.add_argument('--weight_hji',   type=float, default="0.1",   help="weight on hji")
 parser.add_argument('--weight_stl',   type=float, default="0.1",   help="weight on stl")
 parser.add_argument('--teacher_training',   type=float, default="0.1",   help="probability of using previous output in rnn rollout")
+parser.add_argument('--mode',   type=str, default="train",   help="train or eval")
+parser.add_argument('--type',   type=str, default="goal",   help="goal or coverage")
 
 args = parser.parse_args()
 
@@ -53,7 +55,7 @@ layout = [
 ]
 
 
-model_name = "policy_" + '_'.join([t.format(v) for (t, v) in layout])
+model_name = args.type + "_" + '_'.join([t.format(v) for (t, v) in layout])
 print(vars(args))
 print('Model name:', model_name)
 
@@ -84,23 +86,28 @@ if args.teacher_training >= 0.0:
 else:
     teacher_training = sigmoid
 
+if args.weight_hji >= 0.0:
+    weight_hji = lambda ep: args.weight_hji
+else:
+    weight_hji = lambda ep: 0.2 * np.exp(ep/b - c) / (1 + np.exp(ep/b - c))
+
 hps = hyperparameters(weight_decay=0.1, 
                       learning_rate=0.001, 
                       teacher_training=teacher_training,
                       weight_ctrl=args.weight_ctrl,
                       weight_recon=args.weight_recon,
-                      weight_hji=args.weight_hji,
+                      weight_hji=weight_hji,
                       weight_stl=args.weight_stl)
 
 
 
 
 # original data
-x_train_, u_train_, stats = prepare_data("../../hji/data/expert_traj_train.npy")
-x_eval_, u_eval_, _ = prepare_data("../../hji/data/expert_traj_eval.npy")
+x_train_, u_train_, stats = prepare_data("../../hji/data/" + args.type + "/expert_traj_train.npy")
+x_eval_, u_eval_, _ = prepare_data("../../hji/data/" + args.type + "/expert_traj_eval.npy")
 
 ic_train_ = torch.Tensor(InitialConditionDataset(2048, vf_cpu)).float()
-ic_eval_ = torch.tensor(InitialConditionDataset(128, vf_cpu)).float()
+ic_eval_ = torch.tensor(InitialConditionDataset(64, vf_cpu)).float()
 
 
 # standardized data
@@ -134,8 +141,13 @@ cov_env = CoverageEnv(params)
 stl_traj = x_train.permute([1,0,2]).flip(1)
 
 obs_avoid, obs_avoid_input = outside_circle_stl(stl_traj, cov_env.obs[0], device)
-in_box, in_box_input = in_box_stl(stl_traj, cov_env.final, device)
-end_goal = stlcg.Eventually(subformula=stlcg.Always(subformula=in_box))
+in_end_box, in_end_box_input = in_box_stl(stl_traj, cov_env.final, device)
+end_goal = stlcg.Eventually(subformula=stlcg.Always(subformula=in_end_box))
+in_cov_1 in_cov_1_input = in_box_stl(stl_traj, cov_env.covers[0], device)
+in_cov_2 in_cov_2_input = in_box_stl(stl_traj, cov_env.covers[1], device)
+coverage_1 = stlcg.Eventually(subformula=stlcg.Always(subformula=in_cov_1, interval=[0, 10]))
+coverage_2 = stlcg.Eventually(subformula=stlcg.Always(subformula=in_cov_2, interval=[0, 10]))
+
 
 formula = obs_avoid & end_goal
 
@@ -146,18 +158,24 @@ model = STLPolicy(kinematic_bicycle, state_dim, ctrl_dim, args.lstm_dim, stats, 
 log_dir = "../runs/" + model_name
 model_dir = "../models/" + model_name
 
-train(model=model,
-     train_traj=(x_train, u_train),
-     eval_traj=(x_eval, u_eval),
-     formula=formula,
-     formula_input_func=get_formula_input,
-     train_loader=ic_trainloader,
-     eval_loader=ic_evalloader,
-     device=device,
-     tqdm=tqdm.tqdm,
-     writer=SummaryWriter(log_dir=log_dir),
-     hps=hps,
-     save_model_path=model_dir,
-     iter_max=args.iter_max
-     )
+if args.mode == "train":
+    train(model=model,
+         train_traj=(x_train, u_train),
+         eval_traj=(x_eval, u_eval),
+         formula=formula,
+         formula_input_func=get_formula_input,
+         train_loader=ic_trainloader,
+         eval_loader=ic_evalloader,
+         device=device,
+         tqdm=tqdm.tqdm,
+         writer=SummaryWriter(log_dir=log_dir),
+         hps=hps,
+         save_model_path=model_dir,
+         iter_max=args.iter_max
+         )
+else:
+    checkpoint = torch.load(model_dir)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
 
+    IPython.embed(banner1="Model loaded in evaluation mode.")

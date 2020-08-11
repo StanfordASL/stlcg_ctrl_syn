@@ -35,8 +35,8 @@ else
     dx = zeros(5,1);
     psi = x(3);
     V = x(4);
-    dx(1) = V .* cos(psi + beta) + d{1};
-    dx(2) = V .* sin(psi + beta) + d{2};
+    dx(1) = V .* cos(psi + beta);
+    dx(2) = V .* sin(psi + beta);
     dx(3) = V ./ lr .* sin(beta);
     dx(4) = a;
 end

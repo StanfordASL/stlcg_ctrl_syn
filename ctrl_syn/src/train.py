@@ -37,7 +37,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
             for (batch_idx, ic_) in enumerate(train_loader):
                 
                 optimizer.zero_grad()
-                ic = ic_.permute([1,0,2]).to(device).float()
+                ic = torch.cat([x_train[:1,:,:], ic_.permute([1,0,2]).to(device).float()], dim=1)
                 model.train()
                 o, u, x_pred = model(x_train)
 
@@ -54,7 +54,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 loss_stl = model.STL_loss(complete_traj, formula, lambda s,c: formula_input_func(s, c, device), scale=-1)
                 
                 # total loss
-                loss = hps.weight_recon * loss_recon + hps.weight_hji * loss_HJI + hps.weight_stl * loss_stl
+                loss = hps.weight_recon * loss_recon + hps.weight_hji(train_iteration) * loss_HJI + hps.weight_stl * loss_stl
 
                 if torch.isnan(loss):
                     print("Encountered NaN!")
@@ -80,6 +80,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                     fig = plt.figure(figsize=(10,10))
                     model.env.draw2D(kwargs=draw_params)
                     plt.axis("equal")
+                    plot_hji_contour()
                     plt.plot(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], linewidth=4)
                     plt.scatter(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], s=100)
                     plt.plot(p[:,0], p[:,1], linewidth=4)
@@ -113,7 +114,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
             # evaluation set
             model.eval()
             for (batch_idx, ic_) in enumerate(eval_loader):
-                ic = ic_.permute([1,0,2]).to(device).float()
+                ic = torch.cat([x_eval[:1,:,:], ic_.permute([1,0,2]).to(device).float()], dim=1)
                 o, u, x_pred = model(x_eval)
                 loss_state, loss_ctrl = model.state_control_loss(x_eval, x_eval, u_eval, teacher_training=1.0)
                 loss_recon = loss_state + hps.weight_ctrl * loss_ctrl
@@ -121,7 +122,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 complete_traj = model.join_partial_future_signal(ic, x_future)
                 loss_HJI = model.HJI_loss(complete_traj)
                 loss_stl = model.STL_loss(complete_traj, formula, lambda s,c: formula_input_func(s, c, device), scale=-1)
-                loss = hps.weight_recon * loss_recon + hps.weight_hji * loss_HJI + hps.weight_stl * loss_stl
+                loss = hps.weight_recon * loss_recon + hps.weight_hji(train_iteration) * loss_HJI + hps.weight_stl * loss_stl
                 
                 traj_np = unstandardize_data(complete_traj, mu_x, sigma_x).cpu().detach().numpy()
                 x_future, u_future = model.propagate_n(T, x_eval[:1,:,:])
@@ -138,6 +139,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 fig = plt.figure(figsize=(10,10))
                 model.env.draw2D(kwargs=draw_params)
                 plt.axis("equal")
+                plot_hji_contour()
                 plt.plot(x_eval_.squeeze().cpu().numpy()[:,0], x_eval_.squeeze().cpu().numpy()[:,1], linewidth=4)
                 plt.scatter(x_eval_.squeeze().cpu().numpy()[:,0], x_eval_.squeeze().cpu().numpy()[:,1], s=100)
                 plt.plot(p[:,0], p[:,1], linewidth=4)
