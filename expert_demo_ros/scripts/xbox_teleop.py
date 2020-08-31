@@ -4,7 +4,7 @@ import numpy as np
 from std_msgs.msg import Bool
 from sensor_msgs.msg import Joy
 from expert_demo_ros.msg import Float32MultiArrayStamped, PoseTwistStamped
-from geometry_msgs.msg import Point, Quaternion
+from geometry_msgs.msg import Point, Quaternion, Pose
 import tf
 
 class XboxTeleopSim:
@@ -14,13 +14,18 @@ class XboxTeleopSim:
         self.init_state_pub = rospy.Publisher('/robot/init_state', PoseTwistStamped, queue_size=1)
         self.reset_flag_pub = rospy.Publisher('/robot/reset', Bool, queue_size=1)
         rospy.Subscriber('/joy', Joy, self.joy_callback)
+        rospy.Subscriber('/environment/visualization/initial_set', Point, self.initial_set_callback)
+
 
         self.control = Float32MultiArrayStamped()
         self.robot_state = None
         self.reset_flag = False
         self.dx = 0.01
         self.tf_broadcaster = tf.TransformBroadcaster()
+        self.initial_state_offset = Point()
 
+    def initial_set_callback(self, msg):
+        self.initial_state_offset = msg
 
     def joy_callback(self, msg):
         if not self.reset_flag:
@@ -31,7 +36,7 @@ class XboxTeleopSim:
         if msg.buttons[7] == 1:
             rospy.loginfo("Reset sim")
             self.reset_flag = True
-            self.robot_state = PoseTwistStamped()
+            self.robot_state = PoseTwistStamped(pose=Pose(position=self.initial_state_offset))
             self.robot_state.pose.orientation.w = 1.0
             rospy.loginfo("resetting sim mode")
 

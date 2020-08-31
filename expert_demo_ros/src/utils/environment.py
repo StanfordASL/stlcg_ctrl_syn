@@ -3,20 +3,27 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-class CoverageEnv:
+class Environment:
     def __init__(self, params):
         self.obs = params["obstacles"]
         self.covers = params["covers"]
         self.initial = params["initial"]
         self.final = params["final"]
 
-    def draw2D(self, dims=[0, 1], kwargs={"initial": {}, "final": {}, "covers": {}, "obs": {} }):
-        self.initial.draw2D(dims, **kwargs["initial"])
-        self.final.draw2D(dims, **kwargs["final"])
+    def draw2D(self, dims=[0, 1], ax=None, kwargs={"initial": {}, "final": {}, "covers": {}, "obs": {} }):
+        if ax is None:
+            fig, ax = plt.subplots()
+        else:
+            fig = None
+
+        fig, ax = self.initial.draw2D(dims, ax=ax, **kwargs["initial"])
+        self.final.draw2D(dims, ax=ax, **kwargs["final"])
         for covs in self.covers:
-            covs.draw2D(dims, **kwargs["covers"])
+            fig, ax = covs.draw2D(dims, ax=ax, **kwargs["covers"])
         for obs in self.obs:
-            obs.draw2D(dims, **kwargs["obs"])
+            fig, ax = obs.draw2D(dims, ax=ax, **kwargs["obs"])
+
+        return fig, ax
             
         
 
@@ -25,35 +32,54 @@ class Box:
         self.lower = lower
         self.upper = upper
         
-    def draw2D(self, dims=[0,1], fill=False, **kwargs):
+    def center(self):
+        return [(l + u)/2 for (l,u) in zip(self.lower, self.upper)]
+
+    def draw2D(self, dims=[0,1], fill=False, ax=None, **kwargs):
         x, y = dims
         lower = self.lower
         upper = self.upper
         x_corners = [lower[x], upper[x], upper[x], lower[x], lower[x]]
         y_corners = [lower[y], lower[y], upper[y], upper[y], lower[y]]
-        if not fill:
-            plt.plot(x_corners, y_corners, **kwargs)
+        if ax is None:
+            fig, ax = plt.subplots()
         else:
-            plt.fill(x_corners, y_corners, **kwargs)
+            fig = None
 
+        if not fill:
+            ax.plot(x_corners, y_corners, **kwargs)
+        else:
+            ax.fill(x_corners, y_corners, **kwargs)
+
+
+        return fig, ax
             
 class Circle:
     def __init__(self, center, radius):
         self.center = center
         self.radius = radius
         
-    def draw2D(self, dims=[0,1], fill=False, **kwargs):
+    def center(self):
+        return self.center
+        
+    def draw2D(self, dims=[0,1], ax=None, fill=False, **kwargs):
         x, y = dims
         center = [self.center[x], self.center[y]]
         th = np.arange(-np.pi, np.pi+0.1, 0.05)
         x = center[0] + self.radius * np.cos(th)
         y = center[1] + self.radius * np.sin(th)
+        if ax is None:
+            fig, ax = plt.subplots()
+        else:
+            fig = None
+
         if not fill:
             plt.plot(x, y, **kwargs)
         else:
             plt.fill(x, y, **kwargs)
         
-
+        return fig, ax
+            
 if __name__ == "__main__":
     params = {  "covers": [Box([0., 0.6],[0.3, 0.8]), Box([0.6, 0.2],[1.0, 0.4])],
                 "obstacles": [Circle([0.7, 0.7], 0.15)],
@@ -61,8 +87,8 @@ if __name__ == "__main__":
                 "final": Box([0.9, 0.9],[1.1, 1.1])
            }
     draw_params = {"initial": {"color": "lightskyblue", "fill": True, "alpha": 0.5}, "final": {"color": "coral", "fill": True, "alpha": 0.5}, "covers": {"color": "black", "fill": False}, "obs": {"color": "red", "fill": True, "alpha": 0.5} }
-    cov_env = CoverageEnv(params)
-    plt.figure(figsize=(10,10))
-    cov_env.draw2D(kwargs=draw_params)
-    plt.axis("equal")
+    env = Environment(params)
+    fig, ax = plt.subplots(figsize=(10,10))
+    _, ax = env.draw2D(kwargs=draw_params)
+    ax.axis("equal")
     plt.show()

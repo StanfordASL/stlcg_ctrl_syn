@@ -24,12 +24,16 @@
 
     <arg name="MODEL" default="kinematic bicycle" />
     <param name="MODEL" value="$(arg MODEL)" />
+
+    <arg name="ENV_TYPE" default="coverage" />
+    <param name="ENV_TYPE" value="$(arg ENV_TYPE)" />
     
 
     <node
         pkg="expert_demo_ros"
-        type="viz_coverage.py"
+        type="viz_environment.py"
         name="environment_visualization"
+        args="$(arg ENV_TYPE)"
     />
 
     <node

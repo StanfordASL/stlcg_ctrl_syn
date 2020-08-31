@@ -17,16 +17,23 @@ from torch.utils.tensorboard import SummaryWriter
 from environment import *
 import IPython
 
+value = sio.loadmat('../../hji/data/test/value.mat');
+deriv_value = sio.loadmat('../../hji/data/test/deriv_value.mat');
+V = value['data'];
+g = sio.loadmat('../../hji/data/test/grid.mat')['grid'];
+
+
+
 # value = sio.loadmat('../../hji/data/coverage/value.mat');
 # deriv_value = sio.loadmat('../../hji/data/coverage/deriv_value.mat');
 # V = value['data'];
 # g = sio.loadmat('../../hji/data/coverage/grid.mat')['grid'];
 
 
-value = sio.loadmat('../../hji/data/reach_goal/value.mat');
-deriv_value = sio.loadmat('../../hji/data/reach_goal/deriv_value.mat');
-V = value['data'];
-g = sio.loadmat('../../hji/data/reach_goal/grid.mat')['grid'];
+# value = sio.loadmat('../../hji/data/reach_goal/value.mat');
+# deriv_value = sio.loadmat('../../hji/data/reach_goal/deriv_value.mat');
+# V = value['data'];
+# g = sio.loadmat('../../hji/data/reach_goal/grid.mat')['grid'];
 
 
 values = torch.tensor(V[:,:,:,:,-1]).float()
@@ -37,10 +44,15 @@ value_interp = RegularGridInterpolator(points, values)
 deriv_interp = [RegularGridInterpolator(points, dV[i][:,:,:,:,-1]) for i in range(4)]
 
 
-def plot_hji_contour():
+def plot_hji_contour(ax=None):
     proj = np.min(np.min(V[:,:,:,:,-1], -1), -1)
     X, Y = np.meshgrid(g[0][0].flatten(), g[1][0].flatten())
-    plt.contourf(X, Y, proj.T, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], alpha=0.5)
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = None
+    ax.contourf(X, Y, proj.T, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], alpha=0.5)
+    return fig, ax
 
 class HJIValueFunction(torch.autograd.Function):
 
@@ -188,7 +200,7 @@ def initial_conditions(n, vf):
         x0[:,:,:2] -= 0.5
         x0[:,:,:2] *= 2.0
         x0[:,:,2] *= np.pi / 2
-        x0[:,:,2] += np.pi / 4
+        x0[:,:,2] -= np.pi / 4
         x0[:,:,3] *= 2
         p = torch.tensor(x0).float()
         v = vf(p).squeeze().numpy() < 0
@@ -358,7 +370,10 @@ class STLPolicy(torch.nn.Module):
     
     def STL_loss(self, x, formula, formula_input_func, **kwargs):
         signal = unstandardize_data(x, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]).permute([1,0,2]).flip(1)    # [bs, time_dim, state_dim]
-        circle =  self.env.obs[0]
+        if len(self.env.obs) > 0:
+            circle =  self.env.obs[0]
+        else:
+            circle = None
         return torch.relu(-formula.robustness(formula_input_func(signal, circle), **kwargs)).mean()
     
     def HJI_loss(self, x_traj):
@@ -371,6 +386,11 @@ class STLPolicy(torch.nn.Module):
         total_value = self.value_func(unstandardize_data(x_traj, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim])).squeeze(-1).relu().sum(0) * self.dt    # [time_dim, bs, 1]
 
         return total_value.mean()
+
+    def adversarial_HJI_loss(self, x_traj):
+        total_value = self.value_func(unstandardize_data(x_traj, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim])).squeeze(-1).sum(0) * self.dt    # [time_dim, bs, 1]
+
+        return -total_value.mean()
 
 
 
@@ -388,21 +408,23 @@ def in_box_stl(signal, box, device):
 
 
 
-def get_formula_input(signal, circle, device):
+def get_goal_formula_input(signal, circle, device):
     signal = signal.to(device)
     d2 = stlcg.Expression('d2_to_center', (signal[:,:,:2] - torch.tensor(circle.center).unsqueeze(0).unsqueeze(0).to(device)).pow(2).sum(-1, keepdim=True))
     x = stlcg.Expression('x', signal[:,:,:1])
     y = stlcg.Expression('y', signal[:,:,1:2])
     return (d2, ((x, y),(x, y)))
 
+def get_coverage_formula_input(signal, circle, device):
+    a, b = get_goal_formula_input(signal, circle, device)
+    return ((b,b), (a, b))
 
-def plot_xy_from_tensor(x_train, fig=None):
-    xy = x_train.squeeze().detach().numpy()[:,:2]
-    if fig is None:
-        fig = plt.figure(figsize=(10,8))
-    plt.plot(xy[:,0], xy[:,1])
-    plt.scatter(xy[:,0], xy[:,1])
-    return fig
+def get_test_formula_input(signal, circle, device):
+    x = stlcg.Expression('x', signal[:,:,:1])
+    y = stlcg.Expression('y', signal[:,:,1:2])
+    return ((x, y),(x, y))
+
+
 
 # if __name__ == '__main__':
   

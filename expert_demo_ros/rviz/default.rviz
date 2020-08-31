@@ -9,7 +9,6 @@ Panels:
         - /TF1
         - /TF1/Frames1
         - /TF1/Tree1
-        - /MarkerArray1/Namespaces1
         - /Pose1
       Splitter Ratio: 0.5
     Tree Height: 747
@@ -69,17 +68,6 @@ Visualization Manager:
         {}
       Update Interval: 0
       Value: true
-    - Class: rviz/MarkerArray
-      Enabled: true
-      Marker Topic: /coverage/visualization
-      Name: MarkerArray
-      Namespaces:
-        coverage: true
-        final: true
-        initial: true
-        obstacle: true
-      Queue Size: 100
-      Value: true
     - Class: rviz/Marker
       Enabled: true
       Marker Topic: /robot/visualization
@@ -119,6 +107,16 @@ Visualization Manager:
         {}
       Queue Size: 100
       Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /environment/visualization
+      Name: MarkerArray
+      Namespaces:
+        final: true
+        initial: true
+        obstacle: true
+      Queue Size: 100
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -153,11 +151,11 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.00999999978
-      Scale: 48.1673851
+      Scale: 23.9217415
       Target Frame: <Fixed Frame>
       Value: TopDownOrtho (rviz)
-      X: 7.35938454
-      Y: 2.7597692
+      X: 4.09881639
+      Y: -4.03170061
     Saved: ~
 Window Geometry:
   Displays:
