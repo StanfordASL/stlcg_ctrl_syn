@@ -17,10 +17,10 @@ from torch.utils.tensorboard import SummaryWriter
 from environment import *
 import IPython
 
-value = sio.loadmat('../../hji/data/test/value.mat');
-deriv_value = sio.loadmat('../../hji/data/test/deriv_value.mat');
+value = sio.loadmat('../../hji/data/coverage_test/value.mat');
+deriv_value = sio.loadmat('../../hji/data/coverage_test/deriv_value.mat');
 V = value['data'];
-g = sio.loadmat('../../hji/data/test/grid.mat')['grid'];
+g = sio.loadmat('../../hji/data/coverage_test/grid.mat')['grid'];
 
 
 
@@ -187,34 +187,53 @@ def kinematic_bicycle(x, u, dt=0.5, stats=(torch.zeros([1,1,6]), torch.ones([1,1
     return standardize_data(torch.cat([x_new, y_new, psi_new, V_new], dim=-1), μ[:,:,:4], σ[:,:,:4])
 
 
-def initial_conditions(n, vf):
+def initial_conditions(n, vf, stl_type):
     '''
     Use rejection sampling to sample n initial states from a box and inside the reachable set of the initial state of the expert demonstration
     returns a [1, n, state_dim] numpy
     '''
-
-    good_samples = np.zeros([1,2*n,4])
-    total = 0
-    while total < n:
+    if stl_type == "test":
         x0 = np.random.rand(1,n,4)
+        # [-1,1]
         x0[:,:,:2] -= 0.5
         x0[:,:,:2] *= 2.0
+        # [-pi/4, pi/4]
         x0[:,:,2] *= np.pi / 2
         x0[:,:,2] -= np.pi / 4
         x0[:,:,3] *= 2
-        p = torch.tensor(x0).float()
-        v = vf(p).squeeze().numpy() < 0
-        num_new = np.sum(v)
-        good_samples[:,total:num_new+total,:] = x0[:,v,:]
-        total += num_new
-    return good_samples[:,:n,:]
+    elif stl_type == "coverage_test":
+        x0 = np.random.rand(1,n,4)
+        # [-1,1]
+        x0[:,:,:2] -= 0.5
+        x0[:,:,:2] *= 2.0
+        # [pi/2, pi]
+        x0[:,:,2] *= np.pi / 2
+        x0[:,:,2] += np.pi / 2
+        x0[:,:,3] *= 2
+    return x0
+
+    # good_samples = np.zeros([1,2*n,4])
+    # total = 0
+    # while total < n:
+    #     x0 = np.random.rand(1,n,4)
+    #     x0[:,:,:2] -= 0.5
+    #     x0[:,:,:2] *= 2.0
+    #     x0[:,:,2] *= np.pi / 2
+    #     x0[:,:,2] -= np.pi / 4
+    #     x0[:,:,3] *= 2
+    #     p = torch.tensor(x0).float()
+    #     v = vf(p).squeeze().numpy() < 0
+    #     num_new = np.sum(v)
+    #     good_samples[:,total:num_new+total,:] = x0[:,v,:]
+    #     total += num_new
+    # return good_samples[:,:n,:]
 
 
 class InitialConditionDataset(torch.utils.data.Dataset):
 
-    def __init__(self, n, vf):
+    def __init__(self, n, vf, stl_type):
         self.n = n
-        self.ic = initial_conditions(n, vf)
+        self.ic = initial_conditions(n, vf, stl_type)
 
 
     def __len__(self):
@@ -375,6 +394,14 @@ class STLPolicy(torch.nn.Module):
         else:
             circle = None
         return torch.relu(-formula.robustness(formula_input_func(signal, circle), **kwargs)).mean()
+
+    def adversarial_STL_loss(self, x, formula, formula_input_func, **kwargs):
+        signal = unstandardize_data(x, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]).permute([1,0,2]).flip(1)    # [bs, time_dim, state_dim]
+        if len(self.env.obs) > 0:
+            circle =  self.env.obs[0]
+        else:
+            circle = None
+        return formula.robustness(formula_input_func(signal, circle), **kwargs).mean()
     
     def HJI_loss(self, x_traj):
         '''
@@ -407,6 +434,14 @@ def in_box_stl(signal, box, device):
     return ((x > box.lower[0]) & (y > box.lower[1])) & ((x < box.upper[0]) & (y < box.upper[1])), ((x, y),(x, y))
 
 
+def stop_in_box_stl(signal, box, device):
+    signal = signal.to(device)
+    x = stlcg.Expression('x', signal[:,:,:1])
+    y = stlcg.Expression('y', signal[:,:,1:2])
+    v = stlcg.Expression('v', signal[:,:,-1:])
+    return (((x > box.lower[0]) & (y > box.lower[1])) & ((x < box.upper[0]) & (y < box.upper[1]))) & ((v >= 0.0) & (v < 0.5)), (((x, y),(x, y)), (v,v))
+
+
 
 def get_goal_formula_input(signal, circle, device):
     signal = signal.to(device)
@@ -416,15 +451,21 @@ def get_goal_formula_input(signal, circle, device):
     return (d2, ((x, y),(x, y)))
 
 def get_coverage_formula_input(signal, circle, device):
-    a, b = get_goal_formula_input(signal, circle, device)
-    return ((b,b), (a, b))
+    d2, xy = get_goal_formula_input(signal, circle, device)
+    return (((xy, xy), xy), d2)
 
 def get_test_formula_input(signal, circle, device):
+    signal = signal.to(device)
     x = stlcg.Expression('x', signal[:,:,:1])
     y = stlcg.Expression('y', signal[:,:,1:2])
-    return ((x, y),(x, y))
+    v = stlcg.Expression('v', signal[:,:,-1:])
+    return (((x, y),(x, y)), (v,v))
 
-
+def get_coverage_test_formula_input(signal, circle, device):
+    # (cov & end) & obs
+    d2, xy = get_goal_formula_input(signal, circle, device)
+    stop_in_end_goal_input = get_test_formula_input(signal, circle, device)
+    return ((xy, stop_in_end_goal_input), d2)
 
 # if __name__ == '__main__':
   

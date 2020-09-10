@@ -7,6 +7,7 @@ import stlcg
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+import shutil
 import torch
 import scipy.io as sio
 
@@ -51,6 +52,11 @@ parser.add_argument('--scale_max',   type=float, default="50.0",   help="maximum
 parser.add_argument('--scale_min',   type=float, default="0.1",   help="minimum scale weight")
 parser.add_argument('--trainset_size',   type=int, default="1024",   help="size of training ic set")
 parser.add_argument('--evalset_size',   type=int, default="64",   help="size of eval ic set")
+parser.add_argument('--number',   type=int, default="0",   help="train iteration number, used to reset annealing schedules at each new iteration")
+parser.add_argument('--action',   type=str, default="create",   help="run or remove")
+parser.add_argument('--adv_iter_max',   type=int, default="100",   help="number of adversarial steps")
+
+
 
 args = parser.parse_args()
 
@@ -81,6 +87,7 @@ model_name = args.type + "_" + '_'.join([t.format(v) for (t, v) in layout])
 runs_dir = "../runs/" + model_name
 model_dir = "../models/" + model_name
 log_dir = "../logs/" + model_name
+fig_dir = "../figs/" + model_name
 
 if (args.mode == "train") & os.path.exists(runs_dir):
     print("model exists already, changing run number")
@@ -111,6 +118,46 @@ if (args.mode == "train") & os.path.exists(runs_dir):
     runs_dir = "../runs/" + model_name
     model_dir = "../models/" + model_name
     log_dir = "../logs/" + model_name
+    fig_dir = "../figs/" + model_name
+
+if args.action == "remove":
+    try:
+        os.remove(model_dir)
+    except FileNotFoundError:
+        print("model file does not exist")
+
+    try:
+        shutil.rmtree(runs_dir)
+    except FileNotFoundError:
+        print("runs folder does not exist")
+        
+    try:
+        shutil.rmtree(fig_dir)
+    except FileNotFoundError:
+        print("figs folder does not exist")
+
+    sys.exit() 
+else:
+    try:
+        os.mkdir(fig_dir)
+    except FileExistsError:
+        print("fig folder already exists")
+
+    try:
+        os.mkdir(fig_dir + "/train")
+    except FileExistsError:
+        print("fig/train folder already exists")
+
+    try:
+        os.mkdir(fig_dir + "/eval")
+    except FileExistsError:
+        print("fig/eval folder already exists")
+
+    try:
+        os.mkdir(fig_dir + "/adversarial")
+    except FileExistsError:
+        print("fig/adversarial folder already exists")
+
 
 
 write_log(log_dir, "\n\n" + model_name)
@@ -126,7 +173,9 @@ hps_names = ['weight_decay',
              'weight_hji',
              'weight_stl',
              'stl_scale',
-             'alpha'
+             'adv_stl_scale',
+             'alpha',
+             'stl_type'
              ]
 
 
@@ -139,42 +188,54 @@ if device == "cuda":
 else:
     vf =  HJIValueFunction.apply
 
+
+
 b = 80 / (1000.0/args.iter_max)
 c = 6
-sigmoid = lambda ep: 0.1 + 0.9*np.exp(ep/b - c) / (1 + np.exp(ep/b - c))
 if args.teacher_training >= 0.0:
     teacher_training = lambda ep: args.teacher_training
 else:
-    teacher_training = sigmoid
+    teacher_training = lambda ep: 0.1 + 0.9*np.exp(ep/b - c) / (1 + np.exp(ep/b - c))
+    write_log(log_dir, "Teacher training: min={} max={} b={} c={}".format(0.1, 0.9, b, c))
+
 
 if args.weight_hji >= 0.0:
     weight_hji = lambda ep: args.weight_hji
 else:
     c1 = 8
     weight_hji = lambda ep: args.hji_min + (args.hji_max - args.hji_min) * np.exp(ep/b - c1) / (1 + np.exp(ep/b - c1))
-
+    write_log(log_dir, "HJI weight: min={} max={} b={} c={}".format(args.hji_min, args.hji_max, b, c1))
 
 if args.weight_stl >= 0.0:
     weight_stl = lambda ep: args.weight_stl
 else:  
     weight_stl = lambda ep: args.stl_min + (args.stl_max - args.stl_min) * np.exp(ep/b - c) / (1 + np.exp(ep/b - c))
+    write_log(log_dir, "STL weight: min={} max={} b={} c={}".format(args.stl_min, args.stl_max, b, c))
 
 if args.stl_scale >= 0.0:
     stl_scale = lambda ep: args.stl_scale
 else:
     stl_scale = lambda ep: args.scale_min + (args.scale_max - args.scale_min) * np.exp(ep/b - c) / (1 + np.exp(ep/b - c))
+    write_log(log_dir, "STL scale: min={} max={} b={} c={}".format(args.scale_min, args.scale_max, b, c))
+    
+b0 = 80 / (1000.0/args.adv_iter_max)
+c0 = 5
 
+adv_stl_scale = lambda ep: args.scale_min + (args.scale_max - args.scale_min) * np.exp(ep/b0 - c0) / (1 + np.exp(ep/b0 - c0))
+write_log(log_dir, "Adversarial stl scale: min={} max={} b={} c={}".format(args.scale_min, args.scale_max, b0, c0))
 
 
 hps = hyperparameters(weight_decay=0.05, 
-                      learning_rate=0.01, 
+                      learning_rate=0.1, 
                       teacher_training=teacher_training,
                       weight_ctrl=args.weight_ctrl,
                       weight_recon=args.weight_recon,
                       weight_hji=weight_hji,
                       weight_stl=weight_stl,
                       stl_scale=stl_scale,
-                      alpha=0.001)
+                      adv_stl_scale=adv_stl_scale,
+                      alpha=0.001,
+                      stl_type=args.type)
 
 
 
@@ -183,8 +244,8 @@ hps = hyperparameters(weight_decay=0.05,
 x_train_, u_train_, stats = prepare_data("../../hji/data/" + args.type + "/expert_traj_train.npy")
 x_eval_, u_eval_, _ = prepare_data("../../hji/data/" + args.type + "/expert_traj_eval.npy")
 
-ic_train_ = torch.Tensor(InitialConditionDataset(args.trainset_size, vf_cpu)).float()
-ic_eval_ = torch.tensor(InitialConditionDataset(args.evalset_size, vf_cpu)).float()
+ic_train_ = torch.Tensor(InitialConditionDataset(args.trainset_size, vf_cpu, args.type)).float()
+ic_eval_ = torch.tensor(InitialConditionDataset(args.evalset_size, vf_cpu, args.type)).float()
 
 
 # standardized data
@@ -223,7 +284,13 @@ elif args.type == "test":
                 "obstacles": [],
                 "initial": Box([-1., -1.],[1., 1.]),
                 "final": Box([4.0, 4.0],[6.0, 6.0])
-           }  
+           } 
+elif args.type == "coverage_test":
+    params = {  "covers": [Box([0., 6.],[4, 8.])],
+                "obstacles": [Circle([7., 7.], 2.0)],
+                "initial": Box([-1., -1.],[1., 1.]),
+                "final": Box([9.0, 9.0],[11.0, 11.0])
+           } 
 env = Environment(params)
 
 
@@ -233,7 +300,9 @@ if len(params["obstacles"]) > 0:
     obs_avoid, obs_avoid_input = outside_circle_stl(stl_traj, env.obs[0], device)
 
 in_end_box, in_end_box_input = in_box_stl(stl_traj, env.final, device)
-end_goal = stlcg.Eventually(subformula=stlcg.Always(subformula=in_end_box))
+stop_in_end_box, stop_in_end_box_input = stop_in_box_stl(stl_traj, env.final, device)
+
+end_goal = stlcg.Eventually(subformula=stlcg.Always(subformula=stop_in_end_box))
 
 if len(params["covers"]) == 2:
     in_cov_1, in_cov_1_input = in_box_stl(stl_traj, env.covers[0], device)
@@ -241,19 +310,25 @@ if len(params["covers"]) == 2:
     coverage_1 = stlcg.Eventually(subformula=stlcg.Always(subformula=in_cov_1, interval=[0, 10]))
     coverage_2 = stlcg.Eventually(subformula=stlcg.Always(subformula=in_cov_2, interval=[0, 10]))
 
+if len(params["covers"]) == 1:
+    in_cov_1, in_cov_1_input = in_box_stl(stl_traj, env.covers[0], device)
+    coverage_1 = stlcg.Eventually(subformula=stlcg.Always(subformula=in_cov_1, interval=[0, 10]))
 
 if args.type == "goal":
     formula = obs_avoid & end_goal
     get_formula_input = get_goal_formula_input
 elif args.type == "coverage":
-    formula = (coverage_1 & coverage_2) & (obs_avoid & end_goal)
+    coverage_stl = stlcg.Until(subformula1=coverage_1, subformula2=coverage_2)
+    formula = stlcg.Until(subformula1=coverage_stl, subformula2=end_goal) & obs_avoid
     get_formula_input = get_coverage_formula_input
 elif args.type == "test":
     formula = end_goal
     get_formula_input = get_test_formula_input
+elif args.type == "coverage_test":
+    formula = stlcg.Until(subformula1=coverage_1, subformula2=end_goal) & obs_avoid
+    get_formula_input = get_coverage_test_formula_input
 else:
     raise NameError(args.type + " is not defined.")
-
 
 
 model = STLPolicy(kinematic_bicycle, state_dim, ctrl_dim, args.lstm_dim, stats, env, vf, args.dropout).to(device)
@@ -272,28 +347,39 @@ if args.mode == "train":
          writer=SummaryWriter(log_dir=runs_dir),
          hps=hps,
          save_model_path=model_dir,
+         number=args.number,
          iter_max=args.iter_max,
          status=args.status
          )
+
+    prompt = input("Training finished, final comments:")
+    write_log(log_dir, "Training: done! {}".format(prompt))
+
 elif args.mode == 'eval':
     checkpoint = torch.load(model_dir)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
     IPython.embed(banner1="Model loaded in evaluation mode.")
+
+
 elif args.mode == "adversarial":
     adv_ic = adversarial(model=model, 
                          T=x_train.shape[0]+4, 
+                         formula=formula,
+                         formula_input_func=get_formula_input,
                          device=device,
                          tqdm=tqdm.tqdm, 
                          writer=SummaryWriter(log_dir=runs_dir), 
                          hps=hps, 
                          save_model_path=model_dir, 
-                         number=-1,
-                         iter_max=50,
-                         adv_n_samples=32)
-    breakpoint()
+                         number=args.number,
+                         iter_max=args.adv_iter_max,
+                         adv_n_samples=64)
 
+    breakpoint()
+    prompt = input("Adversarial training finished, final comments:")
+    write_log(log_dir, "Adversarial: done! {}".format(prompt))
 elif args.mode == "adv_training_iteration":
 
     for _ in range(3):
@@ -309,7 +395,8 @@ elif args.mode == "adv_training_iteration":
              writer=SummaryWriter(log_dir=runs_dir),
              hps=hps,
              save_model_path=model_dir,
-             iter_max=args.iter_max,
+             number=_,
+             iter_max=(args.iter_max)*(1 + _),
              status=args.status if (_== 0) else "continue"
              )
         write_log(log_dir, "Training: {} training phase(s) done".format(_+1))
@@ -317,13 +404,15 @@ elif args.mode == "adv_training_iteration":
         # adv_ic is [bs, 1, x_dim], cpu in unstandardized form
         adv_ic = adversarial(model=model, 
                              T=x_train.shape[0]+4, 
+                             formula=formula,
+                             formula_input_func=get_formula_input,
                              device=device,
                              tqdm=tqdm.tqdm, 
                              writer=SummaryWriter(log_dir=runs_dir), 
                              hps=hps, 
                              save_model_path=model_dir, 
                              number=_,
-                             iter_max=50,
+                             iter_max=args.adv_iter_max,
                              adv_n_samples=32)
         write_log(log_dir, "Adversarial: {} adversarial phase(s) done".format(_+1))
         write_log(log_dir, "Adversarial: {} adversarial examples".format(adv_ic.shape[0]))
@@ -332,8 +421,8 @@ elif args.mode == "adv_training_iteration":
         if train_num == 0:
             ValueError("Not enough adversarial examples")
 
-        ic_train_ = torch.Tensor(InitialConditionDataset(args.trainset_size, vf_cpu)).float()     # [bs, 1, x_dim]
-        ic_eval_ = torch.tensor(InitialConditionDataset(args.evalset_size, vf_cpu)).float()       # [bs, 1, x_dim]
+        ic_train_ = torch.Tensor(InitialConditionDataset(args.trainset_size, vf_cpu, args.type)).float()     # [bs, 1, x_dim]
+        ic_eval_ = torch.tensor(InitialConditionDataset(args.evalset_size, vf_cpu, args.type)).float()       # [bs, 1, x_dim]
 
         ic_adv_train_ = torch.cat([ic_train_, adv_ic[:train_num,:,:]], dim=0).to(device)
         ic_adv_eval_ = torch.cat([ic_eval_, adv_ic[train_num:,:,:]], dim=0).to(device)
@@ -344,5 +433,9 @@ elif args.mode == "adv_training_iteration":
 
         ic_trainloader = torch.utils.data.DataLoader(ic_train, batch_size=args.trainset_size//32, shuffle=True)
         ic_evalloader = torch.utils.data.DataLoader(ic_eval, batch_size=args.evalset_size, shuffle=False)
+
+    prompt = input("Adversarial and training loop finished, final comments:")
+    write_log(log_dir, "Adversarial + training: done! {}".format(prompt))
+
 else:
     raise NameError("args.mode undefined")

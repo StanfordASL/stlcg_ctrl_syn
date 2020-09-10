@@ -16,12 +16,12 @@ class Environment:
         else:
             fig = None
 
-        fig, ax = self.initial.draw2D(dims, ax=ax, **kwargs["initial"])
+        _, ax = self.initial.draw2D(dims, ax=ax, **kwargs["initial"])
         self.final.draw2D(dims, ax=ax, **kwargs["final"])
         for covs in self.covers:
-            fig, ax = covs.draw2D(dims, ax=ax, **kwargs["covers"])
+            _, ax = covs.draw2D(dims, ax=ax, **kwargs["covers"])
         for obs in self.obs:
-            fig, ax = obs.draw2D(dims, ax=ax, **kwargs["obs"])
+            _, ax = obs.draw2D(dims, ax=ax, **kwargs["obs"])
 
         return fig, ax
             
@@ -74,9 +74,9 @@ class Circle:
             fig = None
 
         if not fill:
-            plt.plot(x, y, **kwargs)
+            ax.plot(x, y, **kwargs)
         else:
-            plt.fill(x, y, **kwargs)
+            ax.fill(x, y, **kwargs)
         
         return fig, ax
             

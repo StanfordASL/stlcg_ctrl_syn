@@ -1,5 +1,6 @@
 import sys
 import torch
+import os
 import numpy as np
 from torch import nn, optim
 import matplotlib.pyplot as plt
@@ -11,10 +12,12 @@ from utils import *
 draw_params = {"initial": {"color": "lightskyblue", "fill": True, "alpha": 0.5}, "final": {"color": "coral", "fill": True, "alpha": 0.5}, "covers": {"color": "black", "fill": False}, "obs": {"color": "red", "fill": True, "alpha": 0.5} }
 
 
-def train(model, train_traj, eval_traj, formula, formula_input_func, train_loader, eval_loader, device, tqdm, writer, hps, save_model_path, iter_max=np.inf, status="new"):
-    
-    optimizer = torch.optim.Adam(model.parameters(), weight_decay=hps.weight_decay)
+def train(model, train_traj, eval_traj, formula, formula_input_func, train_loader, eval_loader, device, tqdm, writer, hps, save_model_path, number, iter_max=np.inf, status="new"):
+    log_dir = save_model_path.replace("models", "logs", 1)
+    fig_dir = save_model_path.replace("models", "figs", 1)
 
+    optimizer = torch.optim.Adam(model.parameters(), weight_decay=hps.weight_decay)
+    model_name = save_model_path.split("/")[-1]
     if status == "new":
         train_iteration = 0 # train iteration number
         eval_iteration = 0 # evaluation iteration number
@@ -40,7 +43,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
     x_eval_ = unstandardize_data(x_eval, mu_x, sigma_x)
     u_eval_ = unstandardize_data(u_eval, mu_u, sigma_u)
     T = x_train.shape[0]+4
-    with tqdm(total=iter_max) as pbar:
+    with tqdm(total=(iter_max - train_iteration)) as pbar:
         while True:
             if train_iteration == iter_max:
                 return
@@ -52,7 +55,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 o, u, x_pred = model(x_train)
 
                 # reconstruct the expert model
-                loss_state, loss_ctrl = model.state_control_loss(x_train, x_train, u_train, teacher_training=hps.teacher_training(train_iteration))
+                loss_state, loss_ctrl = model.state_control_loss(x_train, x_train, u_train, teacher_training=hps.teacher_training(train_iteration - number * iter_max))
                 loss_recon = loss_state + hps.weight_ctrl * loss_ctrl
                 
                 # with new ICs, propagate the trajectories and keep them inside the reachable set
@@ -61,11 +64,11 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 loss_HJI = model.HJI_loss(complete_traj)
                 
                 # stl loss
-                loss_stl = model.STL_loss(complete_traj, formula, lambda s,c: formula_input_func(s, c, device), scale=hps.stl_scale(train_iteration))
+                loss_stl = model.STL_loss(complete_traj, formula, lambda s,c: formula_input_func(s, c, device), scale=hps.stl_scale(train_iteration - number * iter_max))
                 
                 # total loss
-                weight_hji = hps.weight_hji(train_iteration)
-                weight_stl = hps.weight_stl(train_iteration)
+                weight_hji = hps.weight_hji(train_iteration - number * iter_max)
+                weight_stl = hps.weight_stl(train_iteration - number * iter_max)
                 loss = hps.weight_recon * loss_recon + weight_hji * loss_HJI + weight_stl * loss_stl
 
                 torch.save({
@@ -77,40 +80,58 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                    'loss': loss,
                    'ic': ic},
                    save_model_path)
-
+                nan_flag = False
                 # take gradient steps with each loss term to see if they result in NaN after taking a gradient step.
                 loss_stl.backward(retain_graph=True)
                 if torch.stack([torch.isnan(p.grad).sum() for p in model.parameters()]).sum() > 0:
+                    write_log(log_dir, "Training: Backpropagation through STL resulted in NaN. Saving data in nan folder")
                     print("Backpropagation through STL loss resulted in NaN")
-                    return
+                    torch.save({
+                               'train_iteration': train_iteration,
+                               'gradient_step': gradient_step,
+                               'eval_iteration': eval_iteration,
+                               'model_state_dict': model.state_dict(),
+                               'optimizer_state_dict': optimizer.state_dict(),
+                               'loss': loss,
+                               'ic': ic},
+                               '../nan/' + model_name + '/model_stl')
+                    np.save('../nan/' + model_name + '/ic_stl.npy', ic)
+                    nan_flag = True
                 optimizer.zero_grad()
 
                 loss_HJI.backward(retain_graph=True)
                 if torch.stack([torch.isnan(p.grad).sum() for p in model.parameters()]).sum() > 0:
+                    write_log(log_dir, "Training: Backpropagation through HJI resulted in NaN. Saving data in nan folder")
                     print("Backpropagation through HJI loss resulted in NaN")
-                    return
+                    torch.save({
+                               'train_iteration': train_iteration,
+                               'gradient_step': gradient_step,
+                               'eval_iteration': eval_iteration,
+                               'model_state_dict': model.state_dict(),
+                               'optimizer_state_dict': optimizer.state_dict(),
+                               'loss': loss,
+                               'ic': ic},
+                               '../nan/' + model_name + '/model_hji')
+                    np.save('../nan/' + model_name + '/ic_hji.npy', ic)
+                    nan_flag = True
                 optimizer.zero_grad()
 
                 loss_recon.backward(retain_graph=True)
                 if torch.stack([torch.isnan(p.grad).sum() for p in model.parameters()]).sum() > 0:
+                    write_log(log_dir, "Training: Backpropagation through recon resulted in NaN. Saving data in nan folder")
                     print("Backpropagation through recon loss resulted in NaN")
-                    return
+                    torch.save({
+                               'train_iteration': train_iteration,
+                               'gradient_step': gradient_step,
+                               'eval_iteration': eval_iteration,
+                               'model_state_dict': model.state_dict(),
+                               'optimizer_state_dict': optimizer.state_dict(),
+                               'loss': loss,
+                               'ic': ic},
+                               '../nan/' + model_name + '/model_recon')
+                    np.save('../nan/' + model_name + '/ic_recon.npy', ic)
+                    nan_flag = True
                 optimizer.zero_grad()
-
-                # if torch.isnan(loss):
-                #     print("Encountered NaN!")
-                #     return
-                # else: 
-                #     torch.save({
-                #                'train_iteration': train_iteration,
-                #                'gradient_step': gradient_step,
-                #                'eval_iteration': eval_iteration,
-                #                'model_state_dict': model.state_dict(),
-                #                'optimizer_state_dict': optimizer.state_dict(),
-                #                'loss': loss},
-                #                save_model_path)
-
-
 
                 writer.add_scalar('train/loss/state', loss_state, gradient_step)
                 writer.add_scalar('train/loss/ctrl', loss_ctrl, gradient_step)
@@ -147,7 +168,6 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                     ax.set_ylim([-2, 12])
                     writer.add_figure('train/trajectory', fig1, gradient_step)
 
-
                     fig2, axs = plt.subplots(1,2,figsize=(15,6))
                     for (k,a) in enumerate(axs):
                         a.plot(u_train_.squeeze().cpu().detach().numpy()[:,k])
@@ -158,9 +178,15 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                     writer.add_figure('train/controls', fig2, gradient_step)
 
 
+                if nan_flag:
+                    # don't take step, wait for a new batch
+                    continue
                 loss.backward()
                 optimizer.step()
                 gradient_step += 1
+
+            fig1.savefig(fig_dir + '/train/number={}_iteration={}.png'.format(number, train_iteration))
+
 
             # evaluation set
             model.eval()
@@ -206,7 +232,8 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 ax.set_xlim([-5, 15])
                 ax.set_ylim([-2, 12])
                 writer.add_figure('eval/trajectory', fig1, eval_iteration)
-                
+                fig1.savefig(fig_dir + '/eval/number={}_iteration={}.png'.format(number, eval_iteration))
+
                 
                 fig2, axs = plt.subplots(1,2,figsize=(15,6))
                 for (k,a) in enumerate(axs):
