@@ -88,8 +88,10 @@ runs_dir = "../runs/" + model_name
 model_dir = "../models/" + model_name
 log_dir = "../logs/" + model_name
 fig_dir = "../figs/" + model_name
+adv_dir = "../adv/" + model_name
+nan_dir = "../nan/" + model_name
 
-if (args.mode == "train") & os.path.exists(runs_dir):
+if (args.mode == "train") & os.path.exists(runs_dir) & (args.action != "remove"):
     print("model exists already, changing run number")
     args.run += 1
     layout = [
@@ -119,25 +121,47 @@ if (args.mode == "train") & os.path.exists(runs_dir):
     model_dir = "../models/" + model_name
     log_dir = "../logs/" + model_name
     fig_dir = "../figs/" + model_name
+    adv_dir = "../adv/" + model_name
+    nan_dir = "../nan/" + model_name
 
 if args.action == "remove":
-    try:
-        os.remove(model_dir)
-    except FileNotFoundError:
-        print("model file does not exist")
 
-    try:
-        shutil.rmtree(runs_dir)
-    except FileNotFoundError:
-        print("runs folder does not exist")
-        
-    try:
-        shutil.rmtree(fig_dir)
-    except FileNotFoundError:
-        print("figs folder does not exist")
+    ans = input("Are you sure you want to remove the files? (y/n) ")
+    if ans == "y":
+        try:
+            shutil.rmtree(model_dir)
+        except FileNotFoundError:
+            print("model file does not exist")
 
-    sys.exit() 
+        try:
+            shutil.rmtree(runs_dir)
+        except FileNotFoundError:
+            print("runs folder does not exist")
+            
+        try:
+            shutil.rmtree(fig_dir)
+        except FileNotFoundError:
+            print("figs folder does not exist")
+
+        try:
+            shutil.rmtree(adv_dir)
+        except FileNotFoundError:
+            print("adv folder does not exist")
+
+        try:
+            shutil.rmtree(nan_dir)
+        except FileNotFoundError:
+            print("nan folder does not exist")
+
+        sys.exit() 
+    else: sys.exit()
 else:
+
+    try:
+        os.mkdir(model_dir)
+    except FileExistsError:
+        print("model folder already exists")
+
     try:
         os.mkdir(fig_dir)
     except FileExistsError:
@@ -158,9 +182,22 @@ else:
     except FileExistsError:
         print("fig/adversarial folder already exists")
 
+    try:
+        os.mkdir(adv_dir)
+    except FileExistsError:
+        print("adv folder already exists")
+
+    try:
+        os.mkdir(nan_dir)
+    except FileExistsError:
+        print("nan folder already exists")
 
 
 write_log(log_dir, "\n\n" + model_name)
+
+prompt = input("Additional model information: ")
+write_log(log_dir, "Additional model info: {}".format(prompt))
+
 
 print(vars(args))
 print('Model name:', model_name)
@@ -185,8 +222,10 @@ device = args.device
 vf_cpu =  HJIValueFunction.apply
 if device == "cuda":
     vf =  HJIValueFunction_cuda.apply
+    dvf = deriv_interp_cuda
 else:
     vf =  HJIValueFunction.apply
+    dvf = deriv_interp
 
 
 
@@ -331,7 +370,7 @@ else:
     raise NameError(args.type + " is not defined.")
 
 
-model = STLPolicy(kinematic_bicycle, state_dim, ctrl_dim, args.lstm_dim, stats, env, vf, args.dropout).to(device)
+model = STLPolicy(kinematic_bicycle, state_dim, ctrl_dim, args.lstm_dim, stats, env, vf, dvf, args.dropout).to(device)
 
 
 if args.mode == "train":
@@ -339,7 +378,7 @@ if args.mode == "train":
          train_traj=(x_train, u_train),
          eval_traj=(x_eval, u_eval),
          formula=formula,
-         formula_input_func=get_formula_input,
+         formula_input_func=lambda s, c: get_formula_input(s,c, device),
          train_loader=ic_trainloader,
          eval_loader=ic_evalloader,
          device=device,
@@ -364,10 +403,12 @@ elif args.mode == 'eval':
 
 
 elif args.mode == "adversarial":
+    # adv_ic is [bs, 1, x_dim], cpu in unstandardized form
+
     adv_ic = adversarial(model=model, 
                          T=x_train.shape[0]+4, 
                          formula=formula,
-                         formula_input_func=get_formula_input,
+                         formula_input_func=lambda s, c: get_formula_input(s,c, device),
                          device=device,
                          tqdm=tqdm.tqdm, 
                          writer=SummaryWriter(log_dir=runs_dir), 
@@ -377,17 +418,47 @@ elif args.mode == "adversarial":
                          iter_max=args.adv_iter_max,
                          adv_n_samples=64)
 
+    np.save(adv_dir + "/number={}".format(args.number), adv_ic.detach().numpy())
+    write_log(log_dir, "Adversarial: Saved adversarial initial conditions in npy file number={}".format(args.number))
     breakpoint()
     prompt = input("Adversarial training finished, final comments:")
     write_log(log_dir, "Adversarial: done! {}".format(prompt))
+
+
+
 elif args.mode == "adv_training_iteration":
 
-    for _ in range(3):
+    if args.status == "continue":
+        write_log(log_dir, "Adversarial: Continuing adversarial training at number={}".format(args.number))    
+        start_idx = args.number
+        adv_ic = torch.tensor(np.load(adv_dir + "/number={}.npy".format(args.number - 1)))
+        write_log(log_dir, "Adversarial: Loaded adversarial initial conditions from previous adversarial training number={}".format(args.number - 1))    
+        train_num = (adv_ic.shape[0] // 3) * 2
+        if train_num == 0:
+            write_log(log_dir, "Adversarial: Not enough adversarial examples.")
+            ValueError("Not enough adversarial examples")
+        eval_num = adv_ic.shape[0] - train_num
+
+        ic_train_ = torch.Tensor(InitialConditionDataset(args.trainset_size - train_num, vf_cpu, args.type)).float()     # [bs, 1, x_dim]
+        ic_eval_ = torch.tensor(InitialConditionDataset(args.evalset_size - eval_num, vf_cpu, args.type)).float()       # [bs, 1, x_dim]
+        ic_adv_train_ = torch.cat([ic_train_, adv_ic[:train_num,:,:]], dim=0).to(stats[0].device)   # train_num 
+        ic_adv_eval_ = torch.cat([ic_eval_, adv_ic[train_num:,:,:]], dim=0).to(stats[0].device)     # eval_num
+
+        ic_train = standardize_data(ic_adv_train_, stats[0][:,:,:4], stats[1][:,:,:4]).to(device)
+        ic_eval = standardize_data(ic_adv_eval_, stats[0][:,:,:4], stats[1][:,:,:4]).to(device)
+
+        ic_trainloader = torch.utils.data.DataLoader(ic_train, batch_size=args.trainset_size//32, shuffle=True)
+        ic_evalloader = torch.utils.data.DataLoader(ic_eval, batch_size=args.evalset_size, shuffle=False)
+
+    else:
+        start_idx = 0
+
+    for _ in range(start_idx, start_idx + 3):
         train(model=model,
              train_traj=(x_train, u_train),
              eval_traj=(x_eval, u_eval),
              formula=formula,
-             formula_input_func=get_formula_input,
+             formula_input_func=lambda s, c: get_formula_input(s,c, device),
              train_loader=ic_trainloader,
              eval_loader=ic_evalloader,
              device=device,
@@ -405,7 +476,7 @@ elif args.mode == "adv_training_iteration":
         adv_ic = adversarial(model=model, 
                              T=x_train.shape[0]+4, 
                              formula=formula,
-                             formula_input_func=get_formula_input,
+                             formula_input_func=lambda s, c: get_formula_input(s,c, device),
                              device=device,
                              tqdm=tqdm.tqdm, 
                              writer=SummaryWriter(log_dir=runs_dir), 
@@ -414,21 +485,25 @@ elif args.mode == "adv_training_iteration":
                              number=_,
                              iter_max=args.adv_iter_max,
                              adv_n_samples=32)
+        np.save(adv_dir + "/number={}".format(_), adv_ic.detach().numpy())
+        write_log(log_dir, "Adversarial: Saved adversarial initial conditions in npy file number={}".format(_))    
         write_log(log_dir, "Adversarial: {} adversarial phase(s) done".format(_+1))
         write_log(log_dir, "Adversarial: {} adversarial examples".format(adv_ic.shape[0]))
 
-        train_num = adv_ic.shape[0]//2
+        train_num = (adv_ic.shape[0] // 3) * 2
         if train_num == 0:
+            write_log(log_dir, "Adversarial: Not enough adversarial examples.")
             ValueError("Not enough adversarial examples")
+        eval_num = adv_ic.shape[0] - train_num
 
-        ic_train_ = torch.Tensor(InitialConditionDataset(args.trainset_size, vf_cpu, args.type)).float()     # [bs, 1, x_dim]
-        ic_eval_ = torch.tensor(InitialConditionDataset(args.evalset_size, vf_cpu, args.type)).float()       # [bs, 1, x_dim]
+        ic_train_ = torch.Tensor(InitialConditionDataset(args.trainset_size - train_num, vf_cpu, args.type)).float()     # [bs, 1, x_dim]
+        ic_eval_ = torch.tensor(InitialConditionDataset(args.evalset_size - eval_num, vf_cpu, args.type)).float()       # [bs, 1, x_dim]
 
-        ic_adv_train_ = torch.cat([ic_train_, adv_ic[:train_num,:,:]], dim=0).to(device)
-        ic_adv_eval_ = torch.cat([ic_eval_, adv_ic[train_num:,:,:]], dim=0).to(device)
+        ic_adv_train_ = torch.cat([ic_train_, adv_ic[:train_num,:,:]], dim=0).to(stats[0].device)   # train_num 
+        ic_adv_eval_ = torch.cat([ic_eval_, adv_ic[train_num:,:,:]], dim=0).to(stats[0].device)     # eval_num
 
-        ic_train = standardize_data(ic_adv_train_, stats[0][:,:,:4], stats[1][:,:,:4])
-        ic_eval = standardize_data(ic_adv_eval_, stats[0][:,:,:4], stats[1][:,:,:4])
+        ic_train = standardize_data(ic_adv_train_, stats[0][:,:,:4], stats[1][:,:,:4]).to(device)
+        ic_eval = standardize_data(ic_adv_eval_, stats[0][:,:,:4], stats[1][:,:,:4]).to(device)
 
 
         ic_trainloader = torch.utils.data.DataLoader(ic_train, batch_size=args.trainset_size//32, shuffle=True)

@@ -269,7 +269,7 @@ def unstandardize_data(x, mu, sigma):
     
 class STLPolicy(torch.nn.Module):
 
-    def __init__(self, dynamics, state_dim, ctrl_dim, hidden_dim, stats, env, value_func, dropout=0., num_layers=1, dt = 0.5, a_min=-3, a_max=3, delta_min=-0.344, delta_max=0.344):
+    def __init__(self, dynamics, state_dim, ctrl_dim, hidden_dim, stats, env, value_func, deriv_value_func, dropout=0., num_layers=1, dt = 0.5, a_min=-3, a_max=3, delta_min=-0.344, delta_max=0.344):
         super(STLPolicy, self).__init__()
         
         self.dynamics = dynamics
@@ -278,6 +278,7 @@ class STLPolicy(torch.nn.Module):
         self.state_dim = state_dim
         self.env = env
         self.value_func = value_func
+        self.deriv_value_func = deriv_value_func
 
         a_lim_ = torch.tensor([a_min, a_max]).float().unsqueeze(0).unsqueeze(0)
         delta_lim_ = torch.tensor([delta_min, delta_max]).float().unsqueeze(0).unsqueeze(0)
@@ -296,6 +297,18 @@ class STLPolicy(torch.nn.Module):
         self.delta_lim = self.delta_lim.to(device)
         self.stats[0] = self.stats[0].to(device)
         self.stats[1] = self.stats[1].to(device)
+
+    def hamiltonian(self, complete_traj, us, lr=0.7, lf=0.5):
+        μ, σ = self.stats
+        x_traj = torch.clone(unstandardize_data(complete_traj.detach(), self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]))
+        points = [p.contiguous() for p in x_traj.split(1, dim=-1)]
+        dV = torch.cat([self.deriv_value_func[i](points) for i in range(4)], dim=-1)   # [time, bs, x_dim]
+        x, y, psi, V = x_traj.split(1, dim=-1)
+        U = unstandardize_data(us, self.stats[0][:,:,self.state_dim:], self.stats[1][:,:,self.state_dim:])
+        a, delta = U.split(1, dim=-1)
+        beta = torch.atan(lr / (lr + lf) * torch.tan(delta))
+        dVx, dVy, dVp, dVv = dV.split(1, dim=-1)
+        return dVx * V * torch.cos(psi + beta) + dVy * V * torch.cos(psi + beta) + dVp * V/lr * torch.sin(beta) + dVv * a  
 
     def initial_rnn_state(self, x0):
         # x0 is [bs, state_dim]
@@ -370,9 +383,29 @@ class STLPolicy(torch.nn.Module):
             o, u, _ = self.forward(x_input)
             us.append(u)
             uu = torch.cat(us, 0)
-            
+
             return self.L2loss(xx[1:,:,:], x_true[1:,:,:]), self.L2loss(uu, u_true)
         
+    def safety_preserving_loss(self, complete_traj, us):
+        # for states V > -eps and have hamiltonians < 0, want to increase those > 0 
+        eps = 1E-3
+        H = self.hamiltonian(complete_traj, us)
+        value = self.value_func(unstandardize_data(complete_traj, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]))
+        boundary = H[value > -eps]
+        if len(boundary) == 0:
+            return torch.relu(H + eps).mean()
+        return -boundary.mean()
+
+        # return -boundary[boundary < 0].mean()
+
+    def adversarial_safety_preserving_loss(self, complete_traj, us):
+        eps = 1E-3
+        H = self.hamiltonian(complete_traj, us)
+        value = self.value_func(unstandardize_data(complete_traj, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]))
+        boundary = H[value > -eps]
+        return boundary.mean()
+
+
     @staticmethod
     def join_partial_future_signal( x_partial, x_future):
         return torch.cat([x_partial, x_future], 0)
@@ -385,17 +418,28 @@ class STLPolicy(torch.nn.Module):
         x_future, u_future = self.propagate_n(n, x_partial)    # [n, bs, state_dim/ctrl_dim]
         x_complete = self.join_partial_future_signal(x_partial, x_future)
         signal = unstandardize_data(x_complete, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]).permute([1,0,2]).flip(1)    # [bs, time_dim, state_dim]
-        return torch.relu(-formula.robustness(formula_input_func(signal), **kwargs)).mean()
+        robustness = formula.robustness(formula_input_func(signal), **kwargs)
+        violations = robustness[robustness < 0]
+        return -violations.mean()
+        # return torch.relu(-formula.robustness(formula_input_func(signal), **kwargs)).mean()
     
     def STL_loss(self, x, formula, formula_input_func, **kwargs):
+        # penalize negative robustness values only
         signal = unstandardize_data(x, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]).permute([1,0,2]).flip(1)    # [bs, time_dim, state_dim]
         if len(self.env.obs) > 0:
             circle =  self.env.obs[0]
         else:
             circle = None
-        return torch.relu(-formula.robustness(formula_input_func(signal, circle), **kwargs)).mean()
+
+        robustness = formula.robustness(formula_input_func(signal, circle), **kwargs)
+        violations = robustness[robustness < 0]
+        if len(violations) == 0:
+            return torch.relu(-robustness).mean()
+        return -violations.mean()
+        # return torch.relu(-formula.robustness(formula_input_func(signal, circle), **kwargs)).mean()
 
     def adversarial_STL_loss(self, x, formula, formula_input_func, **kwargs):
+        # minimize robustness
         signal = unstandardize_data(x, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]).permute([1,0,2]).flip(1)    # [bs, time_dim, state_dim]
         if len(self.env.obs) > 0:
             circle =  self.env.obs[0]
@@ -419,12 +463,22 @@ class STLPolicy(torch.nn.Module):
 
         return -total_value.mean()
 
+    def HJI_value(self, complete_traj):
+        return self.value_func(unstandardize_data(complete_traj, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]))
 
+    def STL_robustness(self, x, formula, formula_input_func, **kwargs):
+        signal = unstandardize_data(x, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]).permute([1,0,2]).flip(1)    # [bs, time_dim, state_dim]
+        if len(self.env.obs) > 0:
+            circle =  self.env.obs[0]
+        else:
+            circle = None
+
+        return formula.robustness(formula_input_func(signal, circle), **kwargs)
 
 def outside_circle_stl(signal, circle, device):
     signal = signal.to(device)
     d2 = stlcg.Expression('d2_to_center', (signal[:,:,:2] - torch.tensor(circle.center).unsqueeze(0).unsqueeze(0).to(device)).pow(2).sum(-1, keepdim=True))
-    return stlcg.Always(subformula = d2 > circle.radius), d2
+    return stlcg.Always(subformula = d2 > circle.radius**2), d2
     
 
 def in_box_stl(signal, box, device):

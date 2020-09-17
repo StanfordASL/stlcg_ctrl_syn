@@ -21,7 +21,7 @@ def adversarial(model, T, formula, formula_input_func, device, tqdm, writer, hps
     lr = hps.learning_rate
     alpha = hps.alpha
     print("\nAdversarial training on model:", save_model_path, "\n")
-    checkpoint = torch.load(save_model_path)
+    checkpoint = torch.load(save_model_path + '/model')
     model.load_state_dict(checkpoint['model_state_dict'])
     model.train()
     model = model.to(device)
@@ -79,11 +79,14 @@ def adversarial(model, T, formula, formula_input_func, device, tqdm, writer, hps
         for iteration in range(iter_max):
             x_future, u_future = model.propagate_n(T, ic_var)
             complete_traj = model.join_partial_future_signal(ic_var, x_future)
-            adv_loss = model.adversarial_STL_loss(complete_traj, formula, lambda s,c: formula_input_func(s, c, device), scale=hps.adv_stl_scale(iteration))
+            loss_spc = model.adversarial_safety_preserving_loss(complete_traj[:-1,:,:], u_future)
+            loss_hji = model.adversarial_HJI_loss(complete_traj)
+            loss_stl = model.adversarial_STL_loss(complete_traj, formula, formula_input_func, scale=hps.adv_stl_scale(iteration))
 
-            # adv_loss = model.adversarial_HJI_loss(complete_traj)
-                
-            adv_loss.backward()
+            # loss_stl = model.adversarial_HJI_loss(complete_traj)
+            loss = loss_spc + loss_hji + loss_stl
+
+            loss.backward()
             with torch.no_grad():
                 # make gradient step
                 gradient = (ic_var.grad * 10**precision).round() / 10**precision
@@ -115,9 +118,13 @@ def adversarial(model, T, formula, formula_input_func, device, tqdm, writer, hps
             ax1.scatter(ic_var_un[:,:,0], ic_var_un[:,:,1], s=25, c='grey', zorder=15)
             ax2.scatter(ic_var_un[:,:,2], th_y, s=25, c='grey', zorder=15)
             ax3.scatter(ic_var_un[:,:,3], th_y, s=25, c='grey', zorder=15)
-            fig.savefig('../figs/adversarial_training_ic_{}_{}.png'.format(number, iteration))
-            adv_loss_true = model.adversarial_STL_loss(complete_traj, formula, lambda s,c: formula_input_func(s, c, device), scale=-1)
-            writer.add_scalar('adversarial/loss', adv_loss_true, (iter_max * number) + iteration)
+            loss_stl_true = model.adversarial_STL_loss(complete_traj, formula, formula_input_func, scale=-1)
+            writer.add_scalar('adversarial/stl_true', loss_stl_true, (iter_max * number) + iteration)
+            writer.add_scalar('adversarial/stl_soft', loss_stl, (iter_max * number) + iteration)        
+            writer.add_scalar('adversarial/spc', loss_spc, (iter_max * number) + iteration)
+            writer.add_scalar('adversarial/hji', loss_hji, (iter_max * number) + iteration)
+            writer.add_scalar('adversarial/loss_true', loss_spc + loss_stl_true + loss_hji, (iter_max * number) + iteration)
+            writer.add_scalar('adversarial/loss_soft', loss, (iter_max * number) + iteration)
             writer.add_scalar('adversarial/stl_scale', hps.adv_stl_scale(iteration), (iter_max * number) + iteration)
             writer.add_figure('adversarial/initial_states', fig, (iter_max * number) + iteration)
 
@@ -136,14 +143,23 @@ def adversarial(model, T, formula, formula_input_func, device, tqdm, writer, hps
 
             ax.set_xlim([-5, 15])
             ax.set_ylim([-2, 12])
-            fig1.savefig(fig_dir + '/adversarial/number={}_iteration={}.png'.format(number, (iter_max * number) + iteration))
+            fig1.savefig(fig_dir + '/adversarial/number={:02d}_iteration={:03d}.png'.format(number, (iter_max * number) + iteration))
 
             writer.add_figure('adversarial/trajectory', fig1, iteration)
 
-            pbar.set_postfix(adv_loss='{:.2e}'.format(adv_loss))
+            pbar.set_postfix(loss='{:.2e}'.format(loss))
             pbar.update(1)
 
-    adv_ic = ic_var[:,model.value_func(unstandardize_data(complete_traj, mu_x, sigma_x)).squeeze(-1).relu().sum(0)*model.dt > 0,:] # [1, batch, x_dim]
+    hji = model.HJI_value(complete_traj).squeeze()
+    ham = model.hamiltonian(complete_traj[:-1,:,:], u_future).squeeze()
+    stl = model.STL_robustness(complete_traj, formula, formula_input_func)
+
+    violating_idx = (hji > 0).any(0) | ((ham < 0) & (hji[:-1,:] < 0)).any(0) | (stl.squeeze() < 0)
+
+    adv_ic = ic_var[:,violating_idx,:] # [1, batch, x_dim]
+    if violating_idx.sum() == 0.0:
+        breakpoint()
+        return adv_ic
     ret_adv_ic = unstandardize_data(adv_ic, mu_x, sigma_x).to("cpu").detach().permute([1,0,2])
     return ret_adv_ic
 
