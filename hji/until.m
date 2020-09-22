@@ -6,9 +6,15 @@ function [data, tau2] = until(g, obj, tau, data0, obstacle, target, visualize_ar
     dMode = 'max';
     
     HJIextraArgs.obstacleFunction = obstacle;
-    
+    HJIextraArgs.visualize.obstacleFunction = false; 
+
     if nargin >= 6
         HJIextraArgs.targetFunction = target;
+        HJIextraArgs.visualize.targetSet = true; 
+
+        compMethod = 'minVWithTarget';
+    else
+        compMethod = 'minVWithV0';
     end
     
     schemeData.grid = g;
@@ -22,10 +28,9 @@ function [data, tau2] = until(g, obj, tau, data0, obstacle, target, visualize_ar
         HJIextraArgs.visualize.initialValueSet = 1;
         HJIextraArgs.visualize.figNum = 1; %set figure number
         HJIextraArgs.visualize.deleteLastPlot = true; %delete previous plot as you update
-        HJIextraArgs.visualize.targetSet = true; 
     else
         HJIextraArgs.visualize = visualize_args;
     end
-    [data, tau2, ~] = HJIPDE_solve(data0, tau, schemeData, 'minVWithTarget', HJIextraArgs);
+    [data, tau2, ~] = HJIPDE_solve(data0, tau, schemeData, compMethod, HJIextraArgs);
 
 end
