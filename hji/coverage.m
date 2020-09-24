@@ -1,5 +1,5 @@
-addpath(genpath('~/repos/helperOC'))
-addpath(genpath('~/repos/ToolboxLS'))
+addpath(genpath('~/projects/helperOC'))
+addpath(genpath('~/projects/ToolboxLS'))
 % addpath(genpath('~/projects/stlcg_ctrl_syn'))
 
 % 1. Run Backward Reachable Set (BRS) with a goal
@@ -35,12 +35,12 @@ addpath(genpath('~/repos/ToolboxLS'))
 % 8. Add random disturbance (white noise)
 %     add the following code:
 %     HJIextraArgs.addGaussianNoiseStandardDeviation = [0; 0; 0.5];
-
+%%
 % Grid
-grid_min = [-1; -1; -1; -1]*0.5 ; % Lower corner of computation domain
-grid_max = [1; 1; 1; 1]*0.5;    % Upper corner of computation domain
+grid_min = [-1; -2; -1; -2]*1.0 ; % Lower corner of computation domain
+grid_max = [1; 2; 1; 2]*1.0;    % Upper corner of computation domain
 
-N = [21; 21; 21; 21];         % Number of grid points per dimension
+N = [41; 41; 41; 41];         % Number of grid points per dimension
 g = createGrid(grid_min, grid_max, N);
 % Use "g = createGrid(grid_min, grid_max, N);" if there are no periodic
 % state space dimensions
@@ -61,7 +61,7 @@ tau_cov2 = t0:dt:0.7;
 tau_goal = t0:dt:0.7;
 
 %% environment
-R = 0.2;
+R = 0.15;
 cov_center = [-0.25, -0.25];
 goal_center = [0.05, 0.05];
 
@@ -87,7 +87,7 @@ data_always_cov = -data_always_cov;
 figure(2);
 clf;
 hold on
-j = 11;
+j = 21;
 for i = 1:length(tau_cov1)
     subplot(2, 3, i)
     contourf(X, Y, reshape(data_always_cov(:,j,:,j,i), g.N(1), g.N(3)), -10:10); colorbar;
@@ -97,15 +97,15 @@ for i = 1:length(tau_cov1)
 end
 
 %% eventually always_[0,0.2] in coverage circle
-negative values are where we want to reach (opposite of the always operator) positive ones, since there is nowhere that we want to reach during those times.
+% negative values are where we want to reach (opposite of the always operator) positive ones, since there is nowhere that we want to reach during those times.
 target_cov2 = -10*ones(g.N(1), g.N(2), g.N(3), g.N(4), length(tau_cov2));
 target_cov2(:,:,:,:,1:length(tau_cov1)) = data_always_cov;
 [data_eventually_cov, tau_cov2] = eventually(g, obj, tau_cov2, target_cov2(:,:,:,:,1), target_cov2);
-
+%%
 figure(3);
 clf;
 hold on
-j = 11;
+j = 21;
 for i = 1:length(tau_cov2)
     subplot(4, 4, i)
     contourf(X, Y, reshape(data_eventually_cov(:,j,:,j,i), g.N(1), g.N(3)), -2:0.25:2); colorbar;
@@ -117,12 +117,12 @@ end
 %% eventually inside goal
 target_goal = circle_goal;
 [data_eventually_goal, tau_cov3] = eventually(g, obj, tau_goal, target_goal);
-
+%%
 
 figure(4);
 clf;
 hold on
-j = 11;
+j = 21;
 for i = 1:length(tau_cov3)
     subplot(4, 4, i)
     contourf(X, Y, reshape(data_eventually_goal(:,j,:,j,i), g.N(1), g.N(3)), -2:0.25:2); colorbar;
@@ -135,23 +135,26 @@ end
 
 
 %% coverage until goal
-obstacle = -data_eventually_cov;
-goal = data_eventually_goal;
+tau_until = t0:dt:1.0;
+target = ones(N(1), N(2), N(3), N(4), length(tau_until));
+target(:,:,:,:,1:15) = data_eventually_goal;
+obstacle = ones(N(1), N(2), N(3), N(4), length(tau_until));
+obstacle(:,:,:,:,7:end) = -data_eventually_cov;
 
 HJIextraArgs.visualize = false;
-[data_until, tau_until] = until(g, obj, tau_goal, goal(:,:,:,:,1), obstacle, goal);
+[data_until, tau_until] = until(g, obj, tau_until, target(:,:,:,:,1), obstacle, target);
 
-
+%%
 figure(5);
 clf;
 hold on
-j = 11;
-for i = 1:length(tau_cov3)
-        subplot(4, 4, i)
+j = 21;
+for i = 1:length(tau_until)
+        subplot(4, 6, i)
     contourf(X, Y, reshape(data_until(:,j,:,j,i), g.N(1), g.N(3)), -2:0.1:2); colorbar;
     viscircles(cov_center, R, 'Color', 'b');
     viscircles(goal_center, R, 'Color', 'b');
-    title(tau_cov3(i));
+    title(tau_until(i));
     axis equal
 end
 
@@ -160,29 +163,29 @@ end
 %% Compute optimal trajectory from some initial state
   
 %set the initial state
-xinit = [-0.4, 0.0, -0.05, 0.0]
-
-
-
-value = eval_u(g, data_until(:,:,:,:,end), xinit);
+xinit = [-0.45, 0.5, -0.25, 0.0];
+value = eval_u(g, data_until(:,:,:,:,end), xinit)
 obj.x = xinit;
 uMode = 'min';
 TrajextraArgs.uMode = uMode; %set if control wants to min or max
-TrajextraArgs.visualize = false; %show plot
-% TrajextraArgs.fig_num = 6; %figure number
-% TrajextraArgs.projDim = [1 1 0]; 
-dataTraj = flip(data_until, 5)
-[traj, traj_tau] = ...
-  computeOptTraj(g, dataTraj, tau_cov3, obj, TrajextraArgs);
+TrajextraArgs.visualize = true; %show plot
+TrajextraArgs.fig_num = 6; %figure number
+TrajextraArgs.projDim = [1 0 1 0]; 
+dataTraj = flip(data_until, 5);
 
+
+[traj, traj_tau] = ...
+  computeOptTraj(g, dataTraj, tau_until, obj, TrajextraArgs);
+%%
 
 figure(6);
 clf;
 for i = 1:length(traj(1,:))
-    subplot(4,4,i)
+    subplot(2,7,i)
     hold on
     [gOut, dataOut] = proj(g, dataTraj(:,:,:,:,i), [0,1,0,1], traj([2,4], i));
-    contour(X,Y,dataOut, 0:0.01:2)
+%     contourf(X,Y,dataOut, 0:0.1:2)
+    visSetIm(gOut, dataOut, 'red', 0:0.1:5)
     viscircles(cov_center, R, 'Color', 'b');
     viscircles(goal_center, R, 'Color', 'b');
     title(tau_cov3(i));

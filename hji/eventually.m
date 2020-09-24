@@ -7,7 +7,7 @@ function [data, tau2] = eventually(g, obj, tau, data0, target, visualize_args)
         HJIextraArgs.targetFunction = target;
         HJIextraArgs.visualize.targetSet = false; 
 
-        compMethod = 'minVWithTarget';
+        compMethod = 'maxVWithTarget';
     else
         compMethod = 'minVWithV0';
     end
