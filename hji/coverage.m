@@ -40,7 +40,7 @@ addpath(genpath('~/projects/ToolboxLS'))
 grid_min = [-1; -2; -1; -2]*1.0 ; % Lower corner of computation domain
 grid_max = [1; 2; 1; 2]*1.0;    % Upper corner of computation domain
 
-N = [41; 41; 41; 41];         % Number of grid points per dimension
+N = [21; 21; 21; 21];         % Number of grid points per dimension
 g = createGrid(grid_min, grid_max, N);
 % Use "g = createGrid(grid_min, grid_max, N);" if there are no periodic
 % state space dimensions
@@ -174,8 +174,8 @@ TrajextraArgs.projDim = [1 0 1 0];
 dataTraj = flip(data_until, 5);
 
 
-[traj, traj_tau] = ...
-  computeOptTraj(g, dataTraj, tau_until, obj, TrajextraArgs);
+[traj, traj_tau, tEarliestList, values] = ...
+  computeOptTrajTest(g, dataTraj, tau_until, obj, TrajextraArgs);
 %%
 
 figure(6);
@@ -191,7 +191,7 @@ for i = 1:length(traj(1,:))
     title(tau_cov3(i));
     scatter(traj(1,1:i), traj(3,1:i), 50, 'k*')
     plot(traj(1,1:i), traj(3,1:i), 'k')
-    value = eval_u(g, data_until(:,:,:,:,end), traj(:,i))
+    value = eval_u(g, data_until(:,:,:,:,end), traj(:,i));
     axis equal;
 end
 
@@ -203,3 +203,23 @@ viscircles(cov_center, R, 'Color', 'b');
 viscircles(goal_center, R, 'Color', 'b');
 plot(traj(1,:), traj(3,:), 'k')
 scatter(traj(1,:), traj(3,:), 50, 'k*')
+
+
+%% saving
+
+% Grid
+grid_min = [-1; -2; -1; -2; 0] ; % Lower corner of computation domain
+grid_max = [1; 2; 1; 2; 1.0];    % Upper corner of computation domain
+
+N = [21; 21; 21; 21; 21];         % Number of grid points per dimension
+gt = createGrid(grid_min, grid_max, N);
+
+%%
+
+grid = g.vs;
+data = data_until;
+save('stlhj/coverage_DoubleInt_test/grid.mat', 'grid');
+save('stlhj/coverage_DoubleInt_test/value.mat','data');
+
+[derivC, derivL, derivR] = computeGradients(gt, data);
+save('stlhj/coverage_DoubleInt_test/deriv_value.mat', 'derivC');
