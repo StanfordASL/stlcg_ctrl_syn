@@ -1,4 +1,4 @@
-function [traj, traj_tau, tEarliestList, values] = computeOptTrajTest(g, data, tau, dynSys, extraArgs)
+function [traj, traj_tau, tEarliestList, values] = computeOptTrajTest(g, data, tau, dynSys, iter0, extraArgs)
 % [traj, traj_tau] = computeOptTraj(g, data, tau, dynSys, extraArgs)
 %   Computes the optimal trajectories given the optimal value function
 %   represented by (g, data), associated time stamps tau, dynamics given in
@@ -57,7 +57,6 @@ if any(diff(tau)) < 0
 end
 
 % Time parameters
-iter = 1;
 tauLength = length(tau);
 dtSmall = (tau(2) - tau(1))/subSamples;
 % maxIter = 1.25*tauLength;
@@ -69,16 +68,18 @@ tEarliestList = nan(1,tauLength);
 traj(:,1) = dynSys.x;
 tEarliest = 1;
 
+% Determine the earliest time that the current state is in the reachable set
+% Binary search
+upper = tauLength;
+lower = tEarliest;
+
+iter = min(find_earliest_BRS_ind(g, data, dynSys.x, upper, lower), iter0);
+tEarliestList(iter) = iter;
+
 while iter <= tauLength 
-  % Determine the earliest time that the current state is in the reachable set
-  % Binary search
-  upper = tauLength;
-  lower = tEarliest;
-  
-  tEarliest = find_earliest_BRS_ind(g, data, dynSys.x, upper, lower);
-  tEarliestList(iter) = tEarliest;
+
   % BRS at current time
-  BRS_at_t = data(clns{:}, tEarliest);
+  BRS_at_t = data(clns{:}, iter);
   values(iter) = eval_u(g, BRS_at_t, dynSys.x);
   R = 0.15;
   % Visualize BRS corresponding to current trajectory point
@@ -93,9 +94,9 @@ while iter <= tauLength
     title(tStr)
     drawnow
     
-%     if isfield(extraArgs, 'fig_filename')
-%        saveas(gcf,sprintf('%s%d', extraArgs.fig_filename, iter,'.png'))
-%     end
+    if isfield(extraArgs, 'fig_filename')
+       saveas(gcf,sprintf('%s%d', extraArgs.fig_filename, iter,'.png'))
+    end
 
     hold off
   end

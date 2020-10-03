@@ -6,6 +6,8 @@ function [data, tau2] = always(g, obj, tau, data0, target, visualize_args)
     
     if nargin >= 5
         HJIextraArgs.targetFunction = target;
+    else
+        HJIextraArgs.targetFunction = data0;
     end
     
     schemeData.grid = g;

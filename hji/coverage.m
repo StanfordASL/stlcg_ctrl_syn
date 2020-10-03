@@ -59,14 +59,15 @@ dt = 0.05;
 tau_cov1 = t0:dt:0.2;
 tau_cov2 = t0:dt:0.7;
 tau_goal = t0:dt:0.7;
+tau_until = t0:dt:1.0;
 
 %% environment
 R = 0.15;
 cov_center = [-0.25, -0.25];
 goal_center = [0.05, 0.05];
+obstacle_center = [0,0];
 
-
-[X,Y] = meshgrid(g.vs{1},g.vs{2});
+[X,Y] = meshgrid(g.vs{1},g.vs{3});
 Z = (X - cov_center(1)).^2 + (Y - cov_center(2)).^2 - R^2;
 Z = reshape(Z, [g.N(1), 1, g.N(3), 1]);
 circle_cov = repmat(Z, [1, g.N(2), 1, g.N(4)]);
@@ -75,6 +76,25 @@ Z = (X - goal_center(1)).^2 + (Y - goal_center(2)).^2 - R^2;
 Z = reshape(Z, [g.N(1), 1, g.N(3), 1]);
 circle_goal = repmat(Z, [1, g.N(2), 1, g.N(4)]);
 
+Z = (X - obstacle_center(1)).^2 + (Y - obstacle_center(2)).^2 - (R/2)^2;
+Z = reshape(Z, [g.N(1), 1, g.N(3), 1]);
+circle_obs = repmat(Z, [1, g.N(2), 1, g.N(4)]);
+
+%% always avoid obstacle circle
+% negative inside the circle
+[data_avoid_obs, tau_obs] = always(g, obj, tau_until, circle_obs);
+%%
+figure(1);
+clf;
+hold on
+j = 21;
+for i = 1:length(tau_obs)-1
+    subplot(4, 5, i)
+    contourf(X, Y, reshape(data_avoid_obs(:,j,:,j,i), g.N(1), g.N(3)), -10:10); colorbar;
+    viscircles(obstacle_center, R/2, 'Color', 'b');
+    title(tau_obs(i));
+    axis equal
+end
 %% always_[0, 0.2] in coverage circle
 % positive inside the circle
 target_cov1 = repmat(reshape(circle_cov, [g.N(1),g.N(2),g.N(3),g.N(4),1]), 1, 1, 1, 1, length(tau_cov1));
@@ -105,7 +125,7 @@ target_cov2(:,:,:,:,1:length(tau_cov1)) = data_always_cov;
 figure(3);
 clf;
 hold on
-j = 21;
+j = 11;
 for i = 1:length(tau_cov2)
     subplot(4, 4, i)
     contourf(X, Y, reshape(data_eventually_cov(:,j,:,j,i), g.N(1), g.N(3)), -2:0.25:2); colorbar;
@@ -113,6 +133,7 @@ for i = 1:length(tau_cov2)
     title(tau_cov2(i));
     axis equal
 end
+
 
 %% eventually inside goal
 target_goal = circle_goal;
@@ -122,7 +143,7 @@ target_goal = circle_goal;
 figure(4);
 clf;
 hold on
-j = 21;
+j = 11;
 for i = 1:length(tau_cov3)
     subplot(4, 4, i)
     contourf(X, Y, reshape(data_eventually_goal(:,j,:,j,i), g.N(1), g.N(3)), -2:0.25:2); colorbar;
@@ -135,7 +156,6 @@ end
 
 
 %% coverage until goal
-tau_until = t0:dt:1.0;
 target = ones(N(1), N(2), N(3), N(4), length(tau_until));
 target(:,:,:,:,1:15) = data_eventually_goal;
 obstacle = ones(N(1), N(2), N(3), N(4), length(tau_until));
@@ -148,10 +168,10 @@ HJIextraArgs.visualize = false;
 figure(5);
 clf;
 hold on
-j = 21;
+j = 11;
 for i = 1:length(tau_until)
         subplot(4, 6, i)
-    contourf(X, Y, reshape(data_until(:,j,:,j,i), g.N(1), g.N(3)), -2:0.1:2); colorbar;
+    contourf(X, Y, reshape(data_until(:,j,:,j,i), g.N(1), g.N(3)), -10:10); colorbar;
     viscircles(cov_center, R, 'Color', 'b');
     viscircles(goal_center, R, 'Color', 'b');
     title(tau_until(i));
@@ -163,7 +183,9 @@ end
 %% Compute optimal trajectory from some initial state
   
 %set the initial state
-xinit = [-0.45, 0.5, -0.25, 0.0];
+% xinit = [-0.45, 0.5, -0.25, 0.0];
+xinit = [-0.1, 0.0, 0.2, -1.0];
+
 value = eval_u(g, data_until(:,:,:,:,end), xinit)
 obj.x = xinit;
 uMode = 'min';
@@ -171,11 +193,12 @@ TrajextraArgs.uMode = uMode; %set if control wants to min or max
 TrajextraArgs.visualize = true; %show plot
 TrajextraArgs.fig_num = 6; %figure number
 TrajextraArgs.projDim = [1 0 1 0]; 
+TrajextraArgs.fig_filename = 'figs/naive/';
 dataTraj = flip(data_until, 5);
 
-
+iter0 = 10
 [traj, traj_tau, tEarliestList, values] = ...
-  computeOptTrajTest(g, dataTraj, tau_until, obj, TrajextraArgs);
+  computeOptTrajTestNaive(g, dataTraj, tau_until, obj, iter0, TrajextraArgs);
 %%
 
 figure(6);
