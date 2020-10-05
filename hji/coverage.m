@@ -1,5 +1,5 @@
-addpath(genpath('~/projects/helperOC'))
-addpath(genpath('~/projects/ToolboxLS'))
+addpath(genpath('~/repos/helperOC'))
+addpath(genpath('~/repos/ToolboxLS'))
 % addpath(genpath('~/projects/stlcg_ctrl_syn'))
 
 % 1. Run Backward Reachable Set (BRS) with a goal
@@ -37,8 +37,8 @@ addpath(genpath('~/projects/ToolboxLS'))
 %     HJIextraArgs.addGaussianNoiseStandardDeviation = [0; 0; 0.5];
 %%
 % Grid
-grid_min = [-1; -2; -1; -2]*1.0 ; % Lower corner of computation domain
-grid_max = [1; 2; 1; 2]*1.0;    % Upper corner of computation domain
+grid_min = [-1; -2; -1; -2]*1 ; % Lower corner of computation domain
+grid_max = [1; 2; 1; 2]*1;    % Upper corner of computation domain
 
 N = [21; 21; 21; 21];         % Number of grid points per dimension
 g = createGrid(grid_min, grid_max, N);
@@ -65,7 +65,7 @@ tau_until = t0:dt:1.0;
 R = 0.15;
 cov_center = [-0.25, -0.25];
 goal_center = [0.05, 0.05];
-obstacle_center = [0,0];
+obstacle_center = [-0.2,0];
 
 [X,Y] = meshgrid(g.vs{1},g.vs{3});
 Z = (X - cov_center(1)).^2 + (Y - cov_center(2)).^2 - R^2;
@@ -90,7 +90,7 @@ hold on
 j = 21;
 for i = 1:length(tau_obs)-1
     subplot(4, 5, i)
-    contourf(X, Y, reshape(data_avoid_obs(:,j,:,j,i), g.N(1), g.N(3)), -10:10); colorbar;
+    contourf(X, Y, -reshape(data_avoid_obs(:,j,:,j,i), g.N(1), g.N(3)), -10:10); colorbar;
     viscircles(obstacle_center, R/2, 'Color', 'b');
     title(tau_obs(i));
     axis equal
@@ -183,8 +183,9 @@ end
 %% Compute optimal trajectory from some initial state
   
 %set the initial state
-% xinit = [-0.45, 0.5, -0.25, 0.0];
+xinit = [-0.45, 0.5, -0.25, 0.0];
 xinit = [-0.1, 0.0, 0.2, -1.0];
+xinit = [-0.2, 0.5, -0.25, 0.0];
 
 value = eval_u(g, data_until(:,:,:,:,end), xinit)
 obj.x = xinit;
