@@ -13,9 +13,10 @@ lr = 0.7;
 if ~iscell(u)
   u = num2cell(u);
 end
-
-if ~iscell(d)
-  d = num2cell(d);
+if nargin == 5
+    if ~iscell(d)
+      d = num2cell(d);
+    end
 end
 
 a = u{1};

@@ -33,14 +33,16 @@ end
 %%
 % xinit = [-0.1, 0.0, 0.2, -1.0];
 xinit = [-0.2, 0.5, -0.25, 0.0];
+xinit = [-0.3, 0.6, -0.3, 0.0];
 
 obj.x = xinit;
 uMode = 'min';
 TrajextraArgs.uMode = uMode; %set if control wants to min or max
 TrajextraArgs.visualize = true; %show plot
-TrajextraArgs.fig_num = 6; %figure number
+TrajextraArgs.fig_num = 8; %figure number
 TrajextraArgs.projDim = [1 0 1 0]; 
 TrajextraArgs.subSamples = 4;
 TrajextraArgs.fig_filename = 'figs/and/';
 %%
-[traj, traj_tau, values] = computeOptTrajAnd(g, V, dV, tau_until, obj, 10, TrajextraArgs);
+iter0 = 1;
+[traj, traj_tau, values] = computeOptTrajAnd(g, V, dV, tau_until, obj, iter0, TrajextraArgs);

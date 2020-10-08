@@ -87,9 +87,10 @@ while iter <= tauLength
     plot(traj(showDims(1), 1:iter), traj(showDims(2), 1:iter), 'k.')
     hold on
     [g2D, data2D] = proj(g, BRS_at_t, hideDims, traj(hideDims,iter));
-    visSetIm(g2D, data2D, 'red', 0:0.5:5);
-    viscircles([-0.2500   -0.2500], R, 'Color', 'b');
-    viscircles([0.0500    0.0500], R, 'Color', 'b');
+    visSetIm(g2D, data2D', 'red', 0:0.5:5);
+    viscircles([-0.2500   -0.2500]*10, R, 'Color', 'b');
+    viscircles([0.0500    0.0500]*10, R, 'Color', 'b');
+    viscircles([-0.2    0.0]*10, R, 'Color', 'r');
     tStr = sprintf('t = %.3f; tEarliest = %.3f', tau(iter), tau(tEarliest));
     title(tStr)
     drawnow

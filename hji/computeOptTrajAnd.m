@@ -1,4 +1,5 @@
 function [traj, traj_tau, values] = computeOptTrajAnd(g, Vs, dVs, tau, dynSys, iter0, extraArgs)
+[X,Y] = meshgrid(g.vs{1},g.vs{3});
 
 m = length(Vs);
 Vs_mat = zeros([m, size(Vs{1})]);
@@ -85,7 +86,14 @@ while iter <= tauLength
         plot(traj(showDims(1), 1:iter), traj(showDims(2), 1:iter), 'k.')
         hold on
         [g2D, data2D] = proj(g, union(clns{:},iter), hideDims, traj(hideDims,iter));
-        visSetIm(g2D, data2D, 'red', 0:0.5:5);
+%         visSetIm(g2D, data2D', 'red', 0:0.5:5);
+        contour(X, Y, data2D, 0:0.01:0.05, 'r', 'linewidth', 3);
+        [g2D, data2D] = proj(g, reshape(Vs_mat(1,clns{:},iter), size(Vt{1})), hideDims, traj(hideDims,iter));
+%         visSetIm(g2D, data2D', 'blue', 0:0.5:5);
+        contour(X, Y, data2D, 0:0.01:0.05, 'b', 'linewidth', 1);
+        [g2D, data2D] = proj(g, reshape(Vs_mat(2,clns{:},iter), size(Vt{2})), hideDims, traj(hideDims,iter));
+%         visSetIm(g2D, data2D', 'green', 0:0.5:5);
+        contour(X, Y, data2D, 0:0.01:0.05, 'g', 'linewidth', 1);
         viscircles([-0.2500   -0.2500], R, 'Color', 'b');
         viscircles([0.0500    0.0500], R, 'Color', 'b');
         viscircles([-0.2    0.], R/2, 'Color', 'r');

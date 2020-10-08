@@ -17,7 +17,7 @@ function uOpt = optCtrl_and2(obj, ~, ~, ~, dV, uMode)
             minimize max(e)
             H * u <= e;
             obj.uMin <= u <= obj.uMax;
-                                    cvx_end0cx
+        cvx_end
         elseif strcmp(uMode, 'max')
         cvx_begin quiet
             variable e(m,1)
