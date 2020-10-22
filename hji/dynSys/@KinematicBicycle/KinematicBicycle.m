@@ -28,15 +28,15 @@ classdef KinematicBicycle < DynSys
             end
 
             if nargin < 3
-                umax = [3 0.344];
+                umax = [3, 0.344];
             end
 
             if nargin < 4
-                dmin = [-0.5 -0.5];
+                dmin = [-0.5, -0.5];
             end
 
             if nargin < 5
-                dmax = [0.5 0.5];
+                dmax = [0.5, 0.5];
             end
 
             if nargin < 6

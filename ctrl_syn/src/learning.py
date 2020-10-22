@@ -17,11 +17,10 @@ from torch.utils.tensorboard import SummaryWriter
 from environment import *
 import IPython
 
-value = sio.loadmat('../../hji/data/coverage_test/value.mat');
-deriv_value = sio.loadmat('../../hji/data/coverage_test/deriv_value.mat');
-V = value['data'];
-g = sio.loadmat('../../hji/data/coverage_test/grid.mat')['grid'];
-
+# value = sio.loadmat('../../hji/data/coverage_test/value.mat');
+# deriv_value = sio.loadmat('../../hji/data/coverage_test/deriv_value.mat');
+# V = value['data'];
+# g = sio.loadmat('../../hji/data/coverage_test/grid.mat')['grid'];
 
 
 # value = sio.loadmat('../../hji/data/coverage/value.mat');
@@ -35,14 +34,45 @@ g = sio.loadmat('../../hji/data/coverage_test/grid.mat')['grid'];
 # V = value['data'];
 # g = sio.loadmat('../../hji/data/reach_goal/grid.mat')['grid'];
 
+coverage_threshold = 21
+tmax = 3.5
+dt = 0.05
+stay_len = 4
 
-values = torch.tensor(V[:,:,:,:,-1]).float()
+value = sio.loadmat('../hji/stlhj/coverage_KinematicCar/data_until_obs.mat');
+deriv_value = sio.loadmat('../hji/stlhj/coverage_KinematicCar/deriv_data_until_obs.mat');
+V = value['data'];
+g = sio.loadmat('../hji/stlhj/coverage_KinematicCar/grid.mat')['grid'];
+
+values = torch.tensor(np.flip(V, 4).copy()).float()
 dV = [torch.tensor(deriv_value['derivC'][i][0]).float() for i in range(4)];
-points = [torch.from_numpy(g[i][0].flatten()).float() for i in range(4)]
-
+points = [torch.from_numpy(g[i][0].flatten()).float() for i in range(4)] + [torch.tensor(np.arange(0, tmax+dt, dt)).float()]
 value_interp = RegularGridInterpolator(points, values)
-deriv_interp = [RegularGridInterpolator(points, dV[i][:,:,:,:,-1]) for i in range(4)]
+deriv_interp = [RegularGridInterpolator(points, dV[i][:,:,:,:,:]) for i in range(4)]
 
+
+
+# values = torch.tensor(V[:,:,:,:,-1]).float()
+# dV = [torch.tensor(deriv_value['derivC'][i][0]).float() for i in range(4)];
+# points = [torch.from_numpy(g[i][0].flatten()).float() for i in range(4)]
+
+# value_interp = RegularGridInterpolator(points, values)
+# deriv_interp = [RegularGridInterpolator(points, dV[i][:,:,:,:,-1]) for i in range(4)]
+
+
+
+def proj_value( points, proj_dims, proj_vals):
+
+    XY = list(torch.meshgrid(points[proj_dims[0]], points[proj_dims[1]]))
+    other_dims = [torch.ones_like(XY[0]).contiguous() * pv for pv in proj_vals]
+    ps = []
+    for i in range(len(proj_dims) + len(proj_vals)):
+        if i in proj_dims:
+            ps.append(XY.pop(0))
+        else:
+            ps.append(other_dims.pop(0))
+    vs = value_interp(ps)
+    return list(torch.meshgrid(points[proj_dims[0]], points[proj_dims[1]])), vs
 
 def plot_hji_contour(ax=None):
     proj = np.min(np.min(V[:,:,:,:,-1], -1), -1)
@@ -84,7 +114,7 @@ class HJIValueFunction(torch.autograd.Function):
 
 
 value_interp_cuda = RegularGridInterpolator([p.cuda() for p in points], values.cuda())
-deriv_interp_cuda = [RegularGridInterpolator([p.cuda() for p in points], dV[i][:,:,:,:,-1].cuda()) for i in range(4)]
+deriv_interp_cuda = [RegularGridInterpolator([p.cuda() for p in points], dV[i][:,:,:,:,:].cuda()) for i in range(4)]
 
 class HJIValueFunction_cuda(torch.autograd.Function):
 
@@ -113,9 +143,6 @@ class HJIValueFunction_cuda(torch.autograd.Function):
         dim = input.shape[-1]
 
         return  torch.cat([deriv_interp_cuda[i](points) for i in range(dim)], -1) * grad_output
-
-
-
 
 
 
@@ -254,7 +281,6 @@ def unstandardize_data(x, mu, sigma):
 
 
 
-
 # def outside_circle_stl(signal, circle):
 #     d2 = stlcg.Expression('d2_to_center', (signal[:,:,:2] - torch.tensor(circle.center).unsqueeze(0).unsqueeze(0)).pow(2).sum(-1, keepdim=True))
 #     return stlcg.Always(subformula = d2 > circle.radius), d2
@@ -265,11 +291,28 @@ def unstandardize_data(x, mu, sigma):
 #     y = stlcg.Expression('y', signal[:,:,1:2])
 #     return ((x > box.lower[0]) & (y > box.lower[1])) & ((x < box.upper[0]) & (y < box.upper[1])), ((x, y),(x, y))
 
+def get_complete_index_batch(signal, formula, formula_input, absolute_threshold, time_dim=1):
+    trace = formula(formula_input(signal).flip(time_dim)).squeeze()
+    q = torch.where(trace >= 0)
+    qq = torch.cat([q[0][:1]-1, q[0]], dim=0)
+    idx = (qq[1:] - qq[:-1]).bool()
+    tmp = absolute_threshold * torch.ones(trace.shape[0])
+    tmp[q[0][idx]] = trace.shape[time_dim]  - q[1][idx].float() - 1
+    flipped_idx = torch.where(tmp >= absolute_threshold, absolute_threshold * torch.ones_like(tmp), tmp).int()
+    return flipped_idx
 
-    
+
+def get_hji_time(traj, cov_idx, coverage_threshold, tmax=3.5, dt=0.05, time_dim=1, stay_len=4):
+    bs = traj.shape[0]
+    hji_time = torch.arange(0, tmax+dt, dt).unsqueeze(0).repeat(bs,1)
+    time_remaining = traj.shape[time_dim] - cov_idx - 4
+    gather = torch.tensor([[ci for ci in range(cov_idx[i] + stay_len)] + [coverage_threshold + gi for gi in range(time_remaining[i])] for i in range(len(cov_idx))])
+    return torch.gather(hji_time, 1, gather)
+
+
 class STLPolicy(torch.nn.Module):
 
-    def __init__(self, dynamics, state_dim, ctrl_dim, hidden_dim, stats, env, value_func, deriv_value_func, dropout=0., num_layers=1, dt = 0.5, a_min=-3, a_max=3, delta_min=-0.344, delta_max=0.344):
+    def __init__(self, dynamics, state_dim, ctrl_dim, hidden_dim, stats, env, value_func, deriv_value_func, dropout=0., num_layers=1, dt = 0.05, a_min=-3, a_max=3, delta_min=-0.344, delta_max=0.344):
         super(STLPolicy, self).__init__()
         
         self.dynamics = dynamics
@@ -290,6 +333,7 @@ class STLPolicy(torch.nn.Module):
         self.initialize_rnn_h = torch.nn.Linear(state_dim, hidden_dim)
         self.initialize_rnn_c = torch.nn.Linear(state_dim, hidden_dim)
         self.L2loss = torch.nn.MSELoss()
+        ### stl specification details.
         
 
     def switch_device(self, device):
@@ -298,17 +342,25 @@ class STLPolicy(torch.nn.Module):
         self.stats[0] = self.stats[0].to(device)
         self.stats[1] = self.stats[1].to(device)
 
-    def hamiltonian(self, complete_traj, us, lr=0.7, lf=0.5):
-        μ, σ = self.stats
-        x_traj = torch.clone(unstandardize_data(complete_traj.detach(), self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]))
-        points = [p.contiguous() for p in x_traj.split(1, dim=-1)]
-        dV = torch.cat([self.deriv_value_func[i](points) for i in range(4)], dim=-1)   # [time, bs, x_dim]
-        x, y, psi, V = x_traj.split(1, dim=-1)
-        U = unstandardize_data(us, self.stats[0][:,:,self.state_dim:], self.stats[1][:,:,self.state_dim:])
-        a, delta = U.split(1, dim=-1)
-        beta = torch.atan(lr / (lr + lf) * torch.tan(delta))
-        dVx, dVy, dVp, dVv = dV.split(1, dim=-1)
-        return dVx * V * torch.cos(psi + beta) + dVy * V * torch.cos(psi + beta) + dVp * V/lr * torch.sin(beta) + dVv * a  
+    def standardize_x(self, x):
+        mu =  self.stats[0][:,:,:self.state_dim]
+        sigma = self.stats[1][:,:,:self.state_dim]
+        return (x - mu)/sigma
+
+    def unstandardize_x(self, x):
+        mu =  self.stats[0][:,:,:self.state_dim]
+        sigma = self.stats[1][:,:,:self.state_dim]
+        return x * sigma + mu
+
+    def standardize_u(self, u):
+        mu =  self.stats[0][:,:,self.state_dim:]
+        sigma = self.stats[1][:,:,self.state_dim:]
+        return (u - mu)/sigma
+
+    def unstandardize_u(self, u):
+        mu =  self.stats[0][:,:,self.state_dim:]
+        sigma = self.stats[1][:,:,self.state_dim:]
+        return u * sigma + mu
 
     def initial_rnn_state(self, x0):
         # x0 is [bs, state_dim]
@@ -386,11 +438,10 @@ class STLPolicy(torch.nn.Module):
 
             return self.L2loss(xx[1:,:,:], x_true[1:,:,:]), self.L2loss(uu, u_true)
         
-    def safety_preserving_loss(self, complete_traj, us):
+    def safety_preserving_loss(self, complete_traj, us, formula, formula_input, eps=1E-3):
         # for states V > -eps and have hamiltonians < 0, want to increase those > 0 
-        eps = 1E-3
-        H = self.hamiltonian(complete_traj, us)
-        value = self.value_func(unstandardize_data(complete_traj, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]))
+        H = self.hamiltonian(complete_traj, us, formula, formula_input)
+        value = self.HJI_value(complete_traj, formula, formula_input)[:,:-1,:]
         boundary = H[value > -eps]
         if len(boundary) == 0:
             return torch.relu(H + eps).mean()
@@ -398,10 +449,9 @@ class STLPolicy(torch.nn.Module):
 
         # return -boundary[boundary < 0].mean()
 
-    def adversarial_safety_preserving_loss(self, complete_traj, us):
-        eps = 1E-3
+    def adversarial_safety_preserving_loss(self, complete_traj, us, formula, formula_input, eps=1E-3):
         H = self.hamiltonian(complete_traj, us)
-        value = self.value_func(unstandardize_data(complete_traj, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]))
+        value = self.HJI_value(complete_traj, formula, formula_input)[:,:-1,:]
         boundary = H[value > -eps]
         return boundary.mean()
 
@@ -410,76 +460,89 @@ class STLPolicy(torch.nn.Module):
     def join_partial_future_signal( x_partial, x_future):
         return torch.cat([x_partial, x_future], 0)
     
-    def STL_loss_n(self, n, x_partial, formula, formula_input_func, **kwargs):
+    def STL_loss_n(self, n, x_partial, formula, formula_input, **kwargs):
         '''
         Given partial trajectory, roll out the policy to get a complete trajectory.
         Encourage the complete trajectory to satisfy an stl formula
         '''
         x_future, u_future = self.propagate_n(n, x_partial)    # [n, bs, state_dim/ctrl_dim]
         x_complete = self.join_partial_future_signal(x_partial, x_future)
-        signal = unstandardize_data(x_complete, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]).permute([1,0,2]).flip(1)    # [bs, time_dim, state_dim]
-        robustness = formula.robustness(formula_input_func(signal), **kwargs)
+        signal = self.unstandardize_x(x_complete).permute([1,0,2]).flip(1)    # [bs, time_dim, state_dim]
+        robustness = formula.robustness(formula_input(signal), **kwargs)
         violations = robustness[robustness < 0]
         return -violations.mean()
-        # return torch.relu(-formula.robustness(formula_input_func(signal), **kwargs)).mean()
+        # return torch.relu(-formula.robustness(formula_input(signal), **kwargs)).mean()
     
-    def STL_loss(self, x, formula, formula_input_func, **kwargs):
+    def STL_loss(self, x, formula, formula_input, **kwargs):
         # penalize negative robustness values only
-        signal = unstandardize_data(x, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]).permute([1,0,2]).flip(1)    # [bs, time_dim, state_dim]
-        if len(self.env.obs) > 0:
-            circle =  self.env.obs[0]
-        else:
-            circle = None
-
-        robustness = formula.robustness(formula_input_func(signal, circle), **kwargs)
+        signal = self.unstandardize_x(x).permute([1,0,2])    # [bs, time_dim, state_dim]
+        robustness = formula.robustness(formula_input(signal), **kwargs)
         violations = robustness[robustness < 0]
         if len(violations) == 0:
             return torch.relu(-robustness).mean()
         return -violations.mean()
-        # return torch.relu(-formula.robustness(formula_input_func(signal, circle), **kwargs)).mean()
+        # return torch.relu(-formula.robustness(formula_input(signal, circle), **kwargs)).mean()
 
-    def adversarial_STL_loss(self, x, formula, formula_input_func, **kwargs):
+    def adversarial_STL_loss(self, x, formula, formula_input, **kwargs):
         # minimize robustness
-        signal = unstandardize_data(x, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]).permute([1,0,2]).flip(1)    # [bs, time_dim, state_dim]
-        if len(self.env.obs) > 0:
-            circle =  self.env.obs[0]
-        else:
-            circle = None
-        return formula.robustness(formula_input_func(signal, circle), **kwargs).mean()
+        signal = self.unstandardize_x(x).permute([1,0,2])   # [bs, time_dim, state_dim]
+
+        return formula.robustness(formula_input(signal), **kwargs).mean()
     
-    def HJI_loss(self, x_traj):
+    def HJI_loss(self, x_traj, formula, formula_input, absolute_threshold=coverage_threshold):
         '''
         x is [time_dim, bs, state_dim]
         Given a trajectory, compute the integral (finite differencing) of the value function along the trajectory
         Want the value to be negative (more negative the better)
         '''
-        
-        total_value = self.value_func(unstandardize_data(x_traj, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim])).squeeze(-1).relu().sum(0) * self.dt    # [time_dim, bs, 1]
+        return self.HJI_value(x_traj, formula, formula_input).squeeze(-1).relu().sum(0)  * self.dt
 
-        return total_value.mean()
+    def adversarial_HJI_loss(self, x_traj, formula, formula_input):
+        # total_value = self.value_func(self.unstandardize_data(x_traj)).squeeze(-1).sum(0) * self.dt    # [time_dim, bs, 1]
 
-    def adversarial_HJI_loss(self, x_traj):
-        total_value = self.value_func(unstandardize_data(x_traj, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim])).squeeze(-1).sum(0) * self.dt    # [time_dim, bs, 1]
+        return -self.HJI_value(x_traj, formula, formula_input).mean() * self.dt
 
-        return -total_value.mean()
+    def HJI_value(self, complete_traj, formula, formula_input, absolute_threshold=coverage_threshold):
+        signal = self.unstandardize_x(complete_traj).permute([1,0,2])       # [bs, time_dim, state_dim]
+        cov_idx = get_complete_index_batch(signal, formula, formula_input, absolute_threshold)
+        hji_time = get_hji_time(signal, cov_idx, absolute_threshold, tmax=tmax, dt=dt, stay_len=stay_len)
+        ps = torch.cat([signal, hji_time.unsqueeze(-1)], dim=-1)
+        return self.value_func(ps)
 
-    def HJI_value(self, complete_traj):
-        return self.value_func(unstandardize_data(complete_traj, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]))
+    def hamiltonian(self, complete_traj, us, formula, formula_input, absolute_threshold=21, lr=0.7, lf=0.5):
+        signal = self.unstandardize_x(complete_traj).permute([1,0,2])
+        cov_idx = get_complete_index_batch(signal, formula, formula_input, absolute_threshold)
+        hji_time = get_hji_time(signal, cov_idx, absolute_threshold, tmax=tmax, dt=dt, stay_len=stay_len).float()
+        ps = torch.cat([signal.detach(), hji_time.unsqueeze(-1)], dim=-1)
+        points = [p.contiguous() for p in ps.split(1, dim=-1)]
+        dV = torch.cat([deriv_interp[i](points) for i in range(4)], dim=-1)   # [time, bs, x_dim]
+        x, y, psi, V = signal[:,:-1,:].split(1, dim=-1)                       # controls has one less time steps than states
+        U = self.unstandardize_u(us).permute([1,0,2])
+        a, delta = U.split(1, dim=-1)
+        beta = torch.atan(lr / (lr + lf) * torch.tan(delta))
+        dVx, dVy, dVp, dVv = dV[:,:-1,:].split(1, dim=-1)
+        return dVx * V * torch.cos(psi + beta) + dVy * V * torch.sin(psi + beta) + dVp * V/lr * torch.sin(beta) + dVv * a  
 
-    def STL_robustness(self, x, formula, formula_input_func, **kwargs):
-        signal = unstandardize_data(x, self.stats[0][:,:,:self.state_dim], self.stats[1][:,:,:self.state_dim]).permute([1,0,2]).flip(1)    # [bs, time_dim, state_dim]
-        if len(self.env.obs) > 0:
-            circle =  self.env.obs[0]
-        else:
-            circle = None
 
-        return formula.robustness(formula_input_func(signal, circle), **kwargs)
+    def STL_robustness(self, x, formula, formula_input, **kwargs):
+        signal = self.unstandardize_x(x).permute([1,0,2]).flip(1)    # [bs, time_dim, state_dim]
+        return formula.robustness(formula_input(signal), **kwargs)
+
+
 
 def outside_circle_stl(signal, circle, device):
     signal = signal.to(device)
     d2 = stlcg.Expression('d2_to_center', (signal[:,:,:2] - torch.tensor(circle.center).unsqueeze(0).unsqueeze(0).to(device)).pow(2).sum(-1, keepdim=True))
     return stlcg.Always(subformula = d2 > circle.radius**2), d2
-    
+  
+def always_inside_circle(cover, interval=[0,5]):
+    coverage_predicate = stlcg.Expression('d2_to_coverage') < cover.radius**2
+    return stlcg.Always(subformula=coverage_predicate, interval=interval)
+
+def always_inside_circle_input(signal, cover, backwards=False):
+    if not backwards:
+        signal = signal.flip(1)
+    return (signal[:,:,:2] - torch.tensor(cover.center)).pow(2).sum(-1, keepdim=True)
 
 def in_box_stl(signal, box, device):
     signal = signal.to(device)
@@ -520,6 +583,15 @@ def get_coverage_test_formula_input(signal, circle, device):
     d2, xy = get_goal_formula_input(signal, circle, device)
     stop_in_end_goal_input = get_test_formula_input(signal, circle, device)
     return ((xy, stop_in_end_goal_input), d2)
+
+
+# coverage_predicate = stlcg.Expression('d2_to_coverage') < cover.radius**2
+# always_coverage = stlcg.Always(subformula=coverage_predicate, interval=[0,5])
+# goal_predicate = (stlcg.Expression('d2_to_goal') < goal.radius**2) & (stlcg.Expression('speed') < 1.0)
+
+
+# coverage_predicate_input = (signal[:,:,:2] - torch.tensor(cover.center)).pow(2).sum(-1, keepdim=True)
+# goal_predicate_input = (signal[:,:,:2] - torch.tensor(goal.center)).pow(2).sum(-1, keepdim=True), signal[:,:,3:4]
 
 # if __name__ == '__main__':
   

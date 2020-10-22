@@ -152,10 +152,10 @@ if __name__ == "__main__":
                     "final": Box([-15., 5.],[0., 8.0])
                }
     elif env == "test":
-        params = {  "covers": [],
-                    "obstacles": [],
+        params = {  "covers": [Circle([2.5, 5.0], 1.0)],
+                    "obstacles": [Circle([4.5, 6.], 1.0)],
                     "initial": Box([-1., -1.],[1., 1.]),
-                    "final": Box([4.0, 4.0],[6.0, 6.0])
+                    "final": Circle([7., 7.], 1.0)
                }    
     env = Environment(params)
 

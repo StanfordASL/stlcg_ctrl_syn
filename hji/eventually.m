@@ -1,23 +1,23 @@
-function [data, tau2] = eventually(g, obj, tau, data0, target, compMethod, visualize_args)
+function [data, tau2] = eventually(g, obj, tau, compMethod, data0, target, visualize_args)
     % data, or target (time varying): negative values mean it is satisfied
     uMode = 'min';
     dMode = 'max';
     
-    if nargin >= 5
+    if nargin >= 6
         HJIextraArgs.targetFunction = target;
     else
         HJIextraArgs.targetFunction = data0;
-        target = data0;
+%         target = data0;
     end
     HJIextraArgs.visualize.targetSet = false;
-    
-    if nargin < 6
-        if length(size(target)) > length(size(data0))
-            compMethod = 'maxVWithTarget';
-        else
-            compMethod = 'minVWithV0';
-        end
-    end
+%     
+%     if nargin < 6
+%         if length(size(target)) > length(size(data0))
+%             compMethod = 'maxVWithTarget';
+%         else
+%             compMethod = 'minVWithV0';
+%         end
+%     end
     schemeData.grid = g;
     schemeData.dynSys = obj;
     schemeData.accuracy = 'high'; %set accuracy

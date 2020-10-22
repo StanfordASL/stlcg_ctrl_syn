@@ -1,4 +1,4 @@
-function [data, tau2] = until(g, obj, tau, data0, obstacle, target, visualize_args)
+function [data, tau2] = until(g, obj, tau, compMethod, data0, obstacle, target, visualize_args)
     % data, or target (time varying): negative values mean it is satisfied
     % obstacle: negative values mean not satisfied, i.e., want to avoid
     % that set.
@@ -8,13 +8,9 @@ function [data, tau2] = until(g, obj, tau, data0, obstacle, target, visualize_ar
     HJIextraArgs.obstacleFunction = obstacle;
     HJIextraArgs.visualize.obstacleFunction = false; 
 
-    if nargin >= 6
+    if nargin >= 7
         HJIextraArgs.targetFunction = target;
         HJIextraArgs.visualize.targetSet = true; 
-
-        compMethod = 'minVWithTarget';
-    else
-        compMethod = 'minVWithV0';
     end
     
     schemeData.grid = g;
@@ -23,7 +19,7 @@ function [data, tau2] = until(g, obj, tau, data0, obstacle, target, visualize_ar
     schemeData.uMode = uMode;
     schemeData.dMode = dMode;
     
-    if nargin < 7
+    if nargin < 8
         HJIextraArgs.visualize.valueSet = 1;
         HJIextraArgs.visualize.initialValueSet = 1;
         HJIextraArgs.visualize.figNum = 1; %set figure number
