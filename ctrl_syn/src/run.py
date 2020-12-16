@@ -114,7 +114,6 @@ if (args.mode == "train") & os.path.exists(runs_dir) & (args.action != "remove")
         ('device={:s}', args.device),
     ]
 
-
     model_name = args.type + "_" + '_'.join([t.format(v) for (t, v) in layout])
 
     runs_dir = "../runs/" + model_name
@@ -128,70 +127,20 @@ if args.action == "remove":
 
     ans = input("Are you sure you want to remove the files? (y/n) ")
     if ans == "y":
-        try:
-            shutil.rmtree(model_dir)
-        except FileNotFoundError:
-            print("model file does not exist")
-
-        try:
-            shutil.rmtree(runs_dir)
-        except FileNotFoundError:
-            print("runs folder does not exist")
-            
-        try:
-            shutil.rmtree(fig_dir)
-        except FileNotFoundError:
-            print("figs folder does not exist")
-
-        try:
-            shutil.rmtree(adv_dir)
-        except FileNotFoundError:
-            print("adv folder does not exist")
-
-        try:
-            shutil.rmtree(nan_dir)
-        except FileNotFoundError:
-            print("nan folder does not exist")
-
-        sys.exit() 
+        remove_directory(model_dir)
+        remove_directory(runs_dir)
+        remove_directory(fig_dir)
+        remove_directory(adv_dir)
+        remove_directory(nan_dir)
     else: sys.exit()
 else:
-
-    try:
-        os.mkdir(model_dir)
-    except FileExistsError:
-        print("model folder already exists")
-
-    try:
-        os.mkdir(fig_dir)
-    except FileExistsError:
-        print("fig folder already exists")
-
-    try:
-        os.mkdir(fig_dir + "/train")
-    except FileExistsError:
-        print("fig/train folder already exists")
-
-    try:
-        os.mkdir(fig_dir + "/eval")
-    except FileExistsError:
-        print("fig/eval folder already exists")
-
-    try:
-        os.mkdir(fig_dir + "/adversarial")
-    except FileExistsError:
-        print("fig/adversarial folder already exists")
-
-    try:
-        os.mkdir(adv_dir)
-    except FileExistsError:
-        print("adv folder already exists")
-
-    try:
-        os.mkdir(nan_dir)
-    except FileExistsError:
-        print("nan folder already exists")
-
+    make_directory(model_dir)
+    make_directory(fig_dir)
+    make_directory(fig_dir + "/train")
+    make_directory(fig_dir + "/eval")
+    make_directory(fig_dir + "/adversarial")
+    make_directory(adv_dir)
+    make_directory(nan_dir)
 
 write_log(log_dir, "\n\n" + model_name)
 
@@ -212,7 +161,8 @@ hps_names = ['weight_decay',
              'stl_scale',
              'adv_stl_scale',
              'alpha',
-             'stl_type'
+             'stl_type',
+             'coverage_threshold'
              ]
 
 
@@ -274,7 +224,8 @@ hps = hyperparameters(weight_decay=0.05,
                       stl_scale=stl_scale,
                       adv_stl_scale=adv_stl_scale,
                       alpha=0.001,
-                      stl_type=args.type)
+                      stl_type=args.type, 
+                      coverage_threshold=21)
 
 
 
@@ -282,6 +233,9 @@ hps = hyperparameters(weight_decay=0.05,
 # original data
 x_train_, u_train_, stats = prepare_data("../../hji/data/" + args.type + "/expert_traj_train.npy")
 x_eval_, u_eval_, _ = prepare_data("../../hji/data/" + args.type + "/expert_traj_eval.npy")
+# x_train_, u_train_, stats = prepare_data("../../hji/stlhj/coverage_KinematicCar/traj.npy")
+# x_eval_, u_eval_, _ = prepare_data("../../hji/stlhj/coverage_KinematicCar/traj.npy")
+
 
 ic_train_ = torch.Tensor(InitialConditionDataset(args.trainset_size, vf_cpu, args.type)).float()
 ic_eval_ = torch.tensor(InitialConditionDataset(args.evalset_size, vf_cpu, args.type)).float()
@@ -305,6 +259,7 @@ ic_evalloader = torch.utils.data.DataLoader(ic_eval, batch_size=args.evalset_siz
 state_dim = ic_eval.shape[-1]
 ctrl_dim = u_eval.shape[-1]
 
+#  setting up environment
 if args.type == "coverage":
     params = {  "covers": [Box([0., 6.],[4, 8.]), Box([6., 2.],[10.0, 4.0])],
                 "obstacles": [Circle([7., 7.], 2.0)],
@@ -325,60 +280,56 @@ elif args.type == "test":
                 "final": Box([4.0, 4.0],[6.0, 6.0])
            } 
 elif args.type == "coverage_test":
-    params = {  "covers": [Box([0., 6.],[4, 8.])],
-                "obstacles": [Circle([7., 7.], 2.0)],
-                "initial": Box([-1., -1.],[1., 1.]),
-                "final": Box([9.0, 9.0],[11.0, 11.0])
-           } 
+    # params = {  "covers": [Box([0., 6.],[4, 8.])],
+    #             "obstacles": [Circle([7., 7.], 2.0)],
+    #             "initial": Box([-1., -1.],[1., 1.]),
+    #             "final": Box([9.0, 9.0],[11.0, 11.0])
+    #        }
+    # params = { "covers": [Circle([2.5, 5.0], 1.0)],
+    #     "obstacles": [Circle([4.5, 6.], 1.0)],
+    #     "initial": Box([0., 0.],[3., 3.]),
+    #     "final": Circle([7., 7.], 1.0)
+    #   } 
+    params = { "covers": [Circle([8., 3.0], 2.0)],
+               "obstacles": [Circle([4.5, 6.], 1.5)],
+               "initial": Box([0., 0.],[3., 3.]),
+               "final": Circle([1., 9.], 1.0)
+             } 
 env = Environment(params)
 
 
 
 stl_traj = x_train_.permute([1,0,2]).flip(1)
-if len(params["obstacles"]) > 0:
-    obs_avoid, obs_avoid_input = outside_circle_stl(stl_traj, env.obs[0], device)
 
-in_end_box, in_end_box_input = in_box_stl(stl_traj, env.final, device)
-stop_in_end_box, stop_in_end_box_input = stop_in_box_stl(stl_traj, env.final, device)
+in_end_goal = inside_circle(env.final)
+stop_in_end_goal = in_end_goal & (stlcg.Expression('speed')  < 0.5)
+end_goal = stlcg.Eventually(subformula=stop_in_end_goal)
+coverage = stlcg.Eventually(subformula=(always_inside_circle(env.covers[0], interval=[0,10]) & (stlcg.Expression('speed')  < 1.0)))
+avoid_obs = always_outside_circle(env.obs[0])
 
-end_goal = stlcg.Eventually(subformula=stlcg.Always(subformula=stop_in_end_box))
-
-if len(params["covers"]) == 2:
-    in_cov_1, in_cov_1_input = in_box_stl(stl_traj, env.covers[0], device)
-    in_cov_2, in_cov_2_input = in_box_stl(stl_traj, env.covers[1], device)
-    coverage_1 = stlcg.Eventually(subformula=stlcg.Always(subformula=in_cov_1, interval=[0, 10]))
-    coverage_2 = stlcg.Eventually(subformula=stlcg.Always(subformula=in_cov_2, interval=[0, 10]))
-
-if len(params["covers"]) == 1:
-    in_cov_1, in_cov_1_input = in_box_stl(stl_traj, env.covers[0], device)
-    coverage_1 = stlcg.Eventually(subformula=stlcg.Always(subformula=in_cov_1, interval=[0, 10]))
-
-if args.type == "goal":
-    formula = obs_avoid & end_goal
-    get_formula_input = get_goal_formula_input
-elif args.type == "coverage":
-    coverage_stl = stlcg.Until(subformula1=coverage_1, subformula2=coverage_2)
-    formula = stlcg.Until(subformula1=coverage_stl, subformula2=end_goal) & obs_avoid
-    get_formula_input = get_coverage_formula_input
-elif args.type == "test":
-    formula = end_goal
-    get_formula_input = get_test_formula_input
-elif args.type == "coverage_test":
-    formula = stlcg.Until(subformula1=coverage_1, subformula2=end_goal) & obs_avoid
-    get_formula_input = get_coverage_test_formula_input
-else:
-    raise NameError(args.type + " is not defined.")
+stl_formula = stlcg.Until(subformula1=coverage, subformula2=end_goal) & avoid_obs
 
 
-model = STLPolicy(kinematic_bicycle, state_dim, ctrl_dim, args.lstm_dim, stats, env, vf, dvf, args.dropout).to(device)
+dynamics = kinematic_bicycle
+
+model = STLPolicy(dynamics, 
+                  state_dim, 
+                  ctrl_dim, 
+                  args.lstm_dim, 
+                  stats, 
+                  env, 
+                  vf, 
+                  dvf, 
+                  args.dropout,
+                  dt=0.5).to(device)
 
 
 if args.mode == "train":
     train(model=model,
          train_traj=(x_train, u_train),
          eval_traj=(x_eval, u_eval),
-         formula=formula,
-         formula_input_func=lambda s, c: get_formula_input(s,c, device),
+         formula=stl_formula,
+         formula_input_func=lambda s: get_formula_input(s, env.covers[0], env.obs[0], env.final, device, backwards=False),
          train_loader=ic_trainloader,
          eval_loader=ic_evalloader,
          device=device,

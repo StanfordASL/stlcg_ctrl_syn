@@ -16,6 +16,9 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
     log_dir = save_model_path.replace("models", "logs", 1)
     fig_dir = save_model_path.replace("models", "figs", 1)
 
+    coverage = formula.subformula1.subformula1              # (coverage until goal) & avoid obs
+    coverage_input = lambda x: formula_input_func(x)[0][0]
+
     optimizer = torch.optim.Adam(model.parameters(), weight_decay=hps.weight_decay)
     model_name = save_model_path.split("/")[-1]
     if status == "new":
@@ -42,7 +45,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
     u_train_ = unstandardize_data(u_train, mu_u, sigma_u)
     x_eval_ = unstandardize_data(x_eval, mu_x, sigma_x)
     u_eval_ = unstandardize_data(u_eval, mu_u, sigma_u)
-    T = x_train.shape[0]+4
+    T = x_train.shape[0]
     with tqdm(total=(iter_max - train_iteration)) as pbar:
         while True:
             if train_iteration == iter_max:
@@ -81,22 +84,22 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 loss_recon = loss_state + hps.weight_ctrl * loss_ctrl
                 # with new ICs, propagate the trajectories and keep them inside the reachable set
                 x_future, u_future = model.propagate_n(T, ic)
-                complete_traj = model.join_partial_future_signal(ic, x_future)
-                loss_HJI = model.HJI_loss(complete_traj)
-                
+                complete_traj = model.join_partial_future_signal(ic, x_future)      # [time, bs, x_dim]
+                loss_HJI = model.HJI_loss(complete_traj, coverage, coverage_input, absolute_threshold=hps.coverage_threshold)
+
                 # stl loss
                 stl_scale_value = hps.stl_scale(train_iteration % (iter_max // (number + 1)))
-                # breakpoint()
                 loss_stl = model.STL_loss(complete_traj, formula, formula_input_func, scale=stl_scale_value)
                 loss_stl_true = model.STL_loss(complete_traj, formula, formula_input_func, scale=-1)
-                loss_spc = model.safety_preserving_loss(complete_traj[:-1,:,:], u_future)
+                loss_spc = model.safety_preserving_loss(complete_traj, u_future, coverage, coverage_input, absolute_threshold=hps.coverage_threshold)
+
 
                 # total loss
 
                 weight_hji = hps.weight_hji(train_iteration % (iter_max // (number + 1)))
                 weight_stl = hps.weight_stl(train_iteration % (iter_max // (number + 1)))
                 loss = hps.weight_recon * loss_recon + weight_hji * (loss_HJI + 0.5 * loss_spc)  + weight_stl * loss_stl
-
+                
                 torch.save({
                    'train_iteration': train_iteration,
                    'gradient_step': gradient_step,
@@ -202,7 +205,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                     fig1, ax = plt.subplots(figsize=(10,10))
                     _, ax = model.env.draw2D(ax=ax, kwargs=draw_params)
                     ax.axis("equal")
-                    _, ax = plot_hji_contour(ax)
+                    # _, ax = plot_hji_contour(ax)
                     ax.plot(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], linewidth=4)
                     ax.scatter(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], s=100)
                     ax.plot(p[:,0], p[:,1], linewidth=4)
@@ -235,7 +238,15 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 gradient_step += 1
 
             fig1.savefig(fig_dir + '/train/number={:02d}_iteration={:03d}.png'.format(number, train_iteration))
-
+            torch.save({
+                        'train_iteration': train_iteration,
+                        'gradient_step': gradient_step,
+                        'eval_iteration': eval_iteration,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'loss': loss,
+                        'ic': ic},
+                        save_model_path + "/model_{:02d}_iteration={:03d}.png".format(number, train_iteration))
 
             # evaluation set
             model.eval()
@@ -246,11 +257,11 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 loss_recon = loss_state + hps.weight_ctrl * loss_ctrl
                 x_future, u_future = model.propagate_n(T, ic)
                 complete_traj = model.join_partial_future_signal(ic, x_future)
-                loss_HJI = model.HJI_loss(complete_traj)
+                loss_HJI = model.HJI_loss(complete_traj, coverage, coverage_input, absolute_threshold=hps.coverage_threshold)
                 loss_stl = model.STL_loss(complete_traj, formula, formula_input_func, scale=-1)
                 weight_hji = hps.weight_hji(train_iteration)
                 weight_stl = hps.weight_stl(train_iteration)
-                loss_spc = model.safety_preserving_loss(complete_traj[:-1,:,:], u_future)
+                loss_spc = model.safety_preserving_loss(complete_traj, u_future, coverage, coverage_input, absolute_threshold=hps.coverage_threshold)
 
                 loss = hps.weight_recon * loss_recon + weight_hji * (loss_HJI + 0.5 * loss_spc) + weight_stl * loss_stl
                 
@@ -270,7 +281,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 fig1, ax = plt.subplots(figsize=(10,10))
                 _, ax = model.env.draw2D(ax=ax, kwargs=draw_params)
                 ax.axis("equal")
-                _, ax = plot_hji_contour(ax)
+                # _, ax = plot_hji_contour(ax)
                 ax.plot(x_eval_.squeeze().cpu().numpy()[:,0], x_eval_.squeeze().cpu().numpy()[:,1], linewidth=4)
                 ax.scatter(x_eval_.squeeze().cpu().numpy()[:,0], x_eval_.squeeze().cpu().numpy()[:,1], s=100)
                 ax.plot(p[:,0], p[:,1], linewidth=4)
