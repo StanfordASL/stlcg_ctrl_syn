@@ -63,7 +63,7 @@ class KinematicBicycle(torch.nn.Module):
         self.delta_max = params["delta_max"]
         self.state_dim = 4
         self.ctrl_dim = 2
-        
+
     def forward(self, xcurr, ucurr, tol=1E-3):
         lr = self.lr
         lf = self.lf
@@ -72,19 +72,19 @@ class KinematicBicycle(torch.nn.Module):
         V_min = self.V_min
         V_max = self.V_max
         dt = self.dt
-        
-        x, y, psi, V = x.split(1, dim=-1)
-        a, delta = u.split(1, dim=-1)
+
+        x, y, psi, V = xcurr.split(1, dim=-1)
+        a, delta = ucurr.split(1, dim=-1)
         a = a.clamp(self.a_min, self.a_max)
         beta = torch.atan(lr / (lr + lf) * torch.tan(delta.clamp(delta_min, delta_max)))
-        
+
         int_V =  torch.where(a == 0,
-                             V * dt, 
-                             torch.where(a > 0, torch.where(((V_max - V) / a) >= dt, 
-                                                            (0.5 * a * dt**2 + dt * V) * torch.sin(beta) / lr, 
+                             V * dt,
+                             torch.where(a > 0, torch.where(((V_max - V) / a) >= dt,
+                                                            (0.5 * a * dt**2 + dt * V) * torch.sin(beta) / lr,
                                                             (V * ((V_max - V) / a) + 0.5 * ((V_max - V) / a) * (V_max - V) + (dt - ((V_max - V) / a)) * V_max) * torch.sin(beta) / lr),
-                                                torch.where(((V_min - V) / a) >= dt, 
-                                                            (0.5 * a * dt**2 + dt * V) * torch.sin(beta) / lr, 
+                                                torch.where(((V_min - V) / a) >= dt,
+                                                            (0.5 * a * dt**2 + dt * V) * torch.sin(beta) / lr,
                                                             (0.5 * V * ((V_min - V) / a)) * torch.sin(beta) / lr)
                                         )
                              )
@@ -138,29 +138,27 @@ def flip_tuple_input(x, time_dim=1):
 
 class STLPolicy(torch.nn.Module):
 
-    def __init__(self, dynamics, hidden_dim, stats, env, dropout=0., num_layers=1, a_min=-3, a_max=3, delta_min=-0.344, delta_max=0.344):
+    def __init__(self, dynamics, hidden_dim, stats, env, dropout=0., num_layers=1):
         super(STLPolicy, self).__init__()
-        
+
         self.dynamics = dynamics
         self.stats = stats
-        self.dt = dt      
+        self.dt = dynamics.dt
         self.state_dim = dynamics.state_dim
         self.env = env
-        self.value_func = value_func
-        self.deriv_value_func = deriv_value_func
 
         a_lim_ = torch.tensor([dynamics.a_min, dynamics.a_max]).float().unsqueeze(0).unsqueeze(0)
         delta_lim_ = torch.tensor([dynamics.delta_min, dynamics.delta_max]).float().unsqueeze(0).unsqueeze(0)
         self.a_lim = standardize_data(a_lim_, stats[0][:,:,4:5], stats[1][:,:,4:5])
         self.delta_lim = standardize_data(delta_lim_, stats[0][:,:,5:], stats[1][:,:,5:])
-        
-        self.lstm = torch.nn.LSTM(state_dim, hidden_dim, num_layers, dropout=dropout)
+
+        self.lstm = torch.nn.LSTM(self.state_dim, hidden_dim, num_layers, dropout=dropout, batch_first=True)
         self.proj = torch.nn.Sequential(torch.nn.Linear(hidden_dim, dynamics.ctrl_dim), torch.nn.Tanh())
-        self.initialize_rnn_h = torch.nn.Linear(state_dim, hidden_dim)
-        self.initialize_rnn_c = torch.nn.Linear(state_dim, hidden_dim)
+        self.initialize_rnn_h = torch.nn.Linear(self.state_dim, hidden_dim)
+        self.initialize_rnn_c = torch.nn.Linear(self.state_dim, hidden_dim)
         self.L2loss = torch.nn.MSELoss()
         ### stl specification details.
-        
+
 
     def switch_device(self, device):
         self.a_lim = self.a_lim.to(device)
@@ -191,44 +189,71 @@ class STLPolicy(torch.nn.Module):
     def initial_rnn_state(self, x0):
         # x0 is [bs, state_dim]
         return self.initialize_rnn_h(x0), self.initialize_rnn_c(x0)
-    
-    def forward(self, x):        
-        # x is [time_dim, bs, state_dim]
-        h0 = self.initial_rnn_state(x[:1,:,:])
 
-        o, _ = self.lstm(x, h0)    # [time_dim, bs, hidden_dim] , bs = 1 for a single expert trajectory.
-        
-        # [time_dim, bs, ctrl_dim]  projecting between u_min and u_max (standardize) since proj is between -1 and 1 due to tanh
-        u_ = self.proj(o)    # [a, delta]
-        # [-1, 1] -> [a, b] : (b - a)/2 * u + (a + b) / 2 
-        a = (self.a_lim[:,:,1:] - self.a_lim[:,:,:1]) / 2 * u_[:,:,:1] + self.a_lim.mean(-1, keepdims=True)
-        delta = (self.delta_lim[:,:,1:] - self.delta_lim[:,:,:1]) / 2 * u_[:,:,1:] + self.delta_lim.mean(-1, keepdims=True)
+    def forward(self, x0, h0=None):
+        '''
+        Passes x through the LSTM, computes control u, and propagate through dynamics. Very vanilla propagation. Feeds in x into LSTM.
+
+        Inputs:
+            x is [bs, time_dim, state_dim]
+
+        Outputs:
+            o is [bs, time_dim, hidden_dim] --- outputs of the LSTM cell
+            u is [bs, time_dim, ctrl_dim] --- projection of LSTM output state to control
+            x_next is [bs, time_dim, state_dim] --- propagate dynamics from previous state and computed controls
+        '''
+        if h0 is None:
+            h0 = self.initial_rnn_state(x0[:,:1,:].permute([1,0,2]))
+
+        o, _ = self.lstm(x0, h0)    # [bs, time_dim, hidden_dim] , bs = 1 for a single expert trajectory.
+
+        # [bs, time_dim, ctrl_dim]  projecting between u_min and u_max (standardize) since proj is between -1 and 1 due to tanh
+        u_ = self.proj(o)    # [bs, 1, ctrl_dim]   [a, delta]
+
+        # [-1, 1] -> [a, b] : (b - a)/2 * u + (a + b) / 2
+        a_min, a_max = self.a_lim.split(1, dim=-1)
+        delta_min, delta_max = self.delta_lim.split(1, dim=-1)
+        a = (a_max - a_min) / 2 * u_[:,:,:1] + self.a_lim.mean(-1, keepdims=True)
+        delta = (delta_max - delta_min) / 2 * u_[:,:,1:] + self.delta_lim.mean(-1, keepdims=True)
         u = torch.cat([a, delta], dim=-1)
-        x_next = self.standardize_x(self.dynamics(self.unstandardize_x(x_prev), self.unstandardize_u(u)))    # [1, bs, state_dim]
-        x_pred = self.join_partial_future_signal(x[:1,:,:], x_next[:-1,:,:])
-        return o, u, x_pred
-            
-    
-    def propagate_n(self, n, x_partial):
+        # propagate dynamics
+        x_next = self.standardize_x(self.dynamics(self.unstandardize_x(x0), self.unstandardize_u(u)))    # [1, bs, state_dim]
+        # append outputs to initial state
+        # x_pred = self.join_partial_future_signal(x0[:,:1,:], x_next[:,:-1,:])
+        return o, u, x_next
+
+
+
+    def propagate_n(self, n, x_partial, time_dim=1):
         '''
-        n is the number of time steps to propagate forward
-        x_partial is the input trajectory [time_dim, bs, state_dim]
-        dynamics is a function that takes in x and u and gives the next state
+        Given x_partial, predict the future controls/states for the next n time steps
+
+        Inputs:
+            n is the number of time steps to propagate forward
+            x_partial is [bs, previous_time_dim, state_dim] --- input partial trajectory
+            time_dim --- dimension of time. Default=1
+
+        Outputs:
+            x_next is [bs, n, state_dim] --- sequence of states over the next n time steps
+            u_next is [bs, n, ctrl_dim] --- sequence of controls over the next n time steps
         '''
-        h0 = self.initial_rnn_state(x_partial[:1,:,:])
+
+        h0 = self.initial_rnn_state(x_partial[:,:1,:].permute([1,0,2]))
 
         x_future = []
         u_future = []
-        
-        o, h = self.lstm(x_partial, h0)    # h is the last hidden state/last output
 
-        x_prev = x_partial[-1:, :,:]    # [1, bs, state_dim]
+        o, h = self.lstm(x_partial, h0)    # h is the last hidden state/last output
+        # get last state, as that is the input to compute the first step of the n steps
+        x_prev = x_partial[:,-1:,:]    # [bs, 1, state_dim]
 
         for i in range(n):
-            u_ = self.proj(h[0])    # [1, bs, ctrl_dim]
-            # [-1, 1] -> [a, b] : (b - a)/2 * u + (a + b) / 2 
-            a = (self.a_lim[:,:,1:] - self.a_lim[:,:,:1]) / 2 * u_[:,:,:1] + self.a_lim.mean(-1, keepdims=True)
-            delta = (self.delta_lim[:,:,1:] - self.delta_lim[:,:,:1]) / 2 * u_[:,:,1:] + self.delta_lim.mean(-1, keepdims=True)
+            u_ = self.proj(o)    # [bs, 1, ctrl_dim]
+            # [-1, 1] -> [a, b] : (b - a)/2 * u + (a + b) / 2
+            a_min, a_max = self.a_lim.split(1, dim=-1)
+            delta_min, delta_max = self.delta_lim.split(1, dim=-1)
+            a = (a_max - a_min) / 2 * u_[:,:,:1] + self.a_lim.mean(-1, keepdims=True)
+            delta = (delta_max - delta_min) / 2 * u_[:,:,1:] + self.delta_lim.mean(-1, keepdims=True)
             u = torch.cat([a, delta], dim=-1)
             u_future.append(u)
             x_next = self.standardize_x(self.dynamics(self.unstandardize_x(x_prev), self.unstandardize_u(u)))    # [1, bs, state_dim]
@@ -236,54 +261,60 @@ class STLPolicy(torch.nn.Module):
             o, h = self.lstm(x_next, h)    # o, (h,c) are [1, bs, hidden_dim]
 
             x_prev = x_next
-                
-        return torch.cat(x_future, 0), torch.cat(u_future, 0)    # [n, bs, state_dim/ctrl_dim]
-        
-    
-    def state_control_loss(self, x, x_true, u_true, teacher_training=0.0):
+        x_next = torch.cat(x_future, time_dim)
+        u_next = torch.cat(u_future, time_dim)
+        return x_next, u_next
+
+
+    def reconstruction_loss(self, x_true, u_true, teacher_training=0.0, time_dim=1):
+        '''
+        Given an input trajectory x_traj, compute the reconstruction error for state and control.
+
+        Inputs:
+            x_true is [bs, time_dim, state_dim] --- input state trajectory (from expert demonstration)
+            u_true is [bs, time_dim, ctrl_dim] --- input control trajectory (from expert demonstration)
+            teacher_training ∈ [0,1] --- a probability of using the previous propagated state as opposed to the true state from x_true
+                                         a run time, teacher_training=1.0 since we do not have access to the ground truth
+            time_dim --- dimension of time. Default=1
+
+        Outputs:
+            recon_state_loss is the MSE reconstruction loss over the states
+            recon_ctrl_loss is the MSE reconstruction loss over the controls
+            xx is [bs, time_dim, state_dim] --- predicted sequence of states, aimed at recovering x_true
+            uu is [bs, time_dim, ctrl_dim] --- predicted sequence of controls, aimed at recovering u_true
+        '''
+        # no teacher training, relying on ground truth
         if teacher_training == 0.0:
-            o, u, x_pred = self.forward(x)
-            return self.L2loss(x_pred, x_true), self.L2loss(u, u_true)
+            o, u_pred, x_pred = self.forward(x)
+            x_pred = self.join_partial_future_signal(x_true[:,:1,:], x_pred[:,:-1,:])
+            return self.L2loss(x_pred, x_true), self.L2loss(u_pred, u_true)
         else:
             prob = np.random.rand(x.shape[0]-1) < teacher_training
             xs = []
             us = []
-            xs.append(x[:1,:,:])
+            xs.append(x[:,:1,:])
             x_input = xs[-1]
             for t in range(x.shape[0]-1):
-                o, u, x_pred = self.forward(x_input)
-                x_next = x_pred[-1:,:,:]
+                o, u, x_next = self.forward(x_input)
                 xs.append(x_next)
                 us.append(u)
                 if prob[t]:
                     x_input = x_next
                 else:
-                    x_input = x[t+1:t+2,:,:]
-            xx = torch.cat(xs, 0)
+                    x_input = x[:,t+1:t+2,:]
+            xx = torch.cat(xs, time_dim)
             o, u, _ = self.forward(x_input)
             us.append(u)
-            uu = torch.cat(us, 0)
+            uu = torch.cat(us, time_dim)
+            # ignoring the first time step since there will be no error
+            recon_state_loss = self.L2loss(xx[1:,:,:], x_true[1:,:,:])
+            recon_ctrl_loss = self.L2loss(uu, u_true)
+            return recon_state_loss, recon_ctrl_loss, xx, uu
 
-            return self.L2loss(xx[1:,:,:], x_true[1:,:,:]), self.L2loss(uu, u_true)
-        
 
     @staticmethod
-    def join_partial_future_signal( x_partial, x_future):
-        return torch.cat([x_partial, x_future], 0)
-    
-    def STL_loss_n(self, n, x_partial, formula, formula_input, **kwargs):
-        '''
-        Given partial trajectory, roll out the policy to get a complete trajectory.
-        Encourage the complete trajectory to satisfy an stl formula
-        '''
-        x_future, u_future = self.propagate_n(n, x_partial)    # [n, bs, state_dim/ctrl_dim]
-        x_complete = self.join_partial_future_signal(x_partial, x_future)
-        signal = self.unstandardize_x(x_complete).permute([1,0,2]).flip(1)    # [bs, time_dim, state_dim]
-        robustness = formula.robustness(formula_input(signal), **kwargs)
-        violations = robustness[robustness < 0]
-        return -violations.mean()
-        # return torch.relu(-formula.robustness(formula_input(signal), **kwargs)).mean()
-
+    def join_partial_future_signal( x_partial, x_future, time_dim=1):
+        return torch.cat([x_partial, x_future], time_dim)
 
     def STL_robustness(self, x, formula, formula_input, **kwargs):
         signal = self.unstandardize_x(x).permute([1,0,2])    # [bs, time_dim, state_dim]
@@ -300,83 +331,3 @@ class STLPolicy(torch.nn.Module):
     def adversarial_STL_loss(self, x, formula, formula_input, **kwargs):
         # minimize mean robustness
         return self.STL_robustness(x, formula, formula_input, **kwargs).mean()
-    
-
-
-def outside_circle_stl(signal, circle, device):
-    signal = signal.to(device)
-    d2 = stlcg.Expression('d2_to_center', (signal[:,:,:2] - torch.tensor(circle.center).unsqueeze(0).unsqueeze(0).to(device)).pow(2).sum(-1, keepdim=True))
-    return stlcg.Always(subformula = d2 > circle.radius**2), d2
-
-def inside_circle(cover):
-    return stlcg.Expression('d2_to_coverage') < cover.radius**2
-
-def always_inside_circle(cover, interval=[0,5]):
-    pred = inside_circle(cover)
-    return stlcg.Always(subformula=pred, interval=interval)
-
-def inside_circle_input(signal, cover, device='cpu', backwards=False):
-    if not backwards:
-        signal = signal.flip(1)
-    return (signal[:,:,:2].to(device) - torch.tensor(cover.center).to(device)).pow(2).sum(-1, keepdim=True)
-
-def outside_circle(circle):
-    return stlcg.Negation(subformula=inside_circle(circle))
-
-def always_outside_circle(circle, interval=None):
-    pred = outside_circle(circle)
-    return stlcg.Always(subformula=pred, interval=interval)
-
-def outside_circle_input(signal, circle, device='cpu', backwards=False):
-    return inside_circle_input(signal, circle, device, backwards)
-
-def get_formula_input(signal, cover, obs, goal, device, backwards=False):
-    coverage_input = inside_circle_input(signal, cover, device, backwards)
-    obs_input = outside_circle_input(signal, obs, device, backwards)
-    goal_input = inside_circle_input(signal, goal, device, backwards)
-    speed_input = signal[:,:,3:4]
-    if not backwards:
-        speed_input = speed_input.flip(1)
-    return (((coverage_input, speed_input),(goal_input, speed_input)), obs_input)
-
-def in_box_stl(signal, box, device):
-    signal = signal.to(device)
-    x = stlcg.Expression('x', signal[:,:,:1])
-    y = stlcg.Expression('y', signal[:,:,1:2])
-    return ((x > box.lower[0]) & (y > box.lower[1])) & ((x < box.upper[0]) & (y < box.upper[1])), ((x, y),(x, y))
-
-
-def stop_in_box_stl(signal, box, device):
-    signal = signal.to(device)
-    x = stlcg.Expression('x', signal[:,:,:1])
-    y = stlcg.Expression('y', signal[:,:,1:2])
-    v = stlcg.Expression('v', signal[:,:,-1:])
-    return (((x > box.lower[0]) & (y > box.lower[1])) & ((x < box.upper[0]) & (y < box.upper[1]))) & ((v >= 0.0) & (v < 0.5)), (((x, y),(x, y)), (v,v))
-
-
-
-def get_goal_formula_input(signal, circle, device):
-    signal = signal.to(device)
-    d2 = stlcg.Expression('d2_to_center', (signal[:,:,:2] - torch.tensor(circle.center).unsqueeze(0).unsqueeze(0).to(device)).pow(2).sum(-1, keepdim=True))
-    x = stlcg.Expression('x', signal[:,:,:1])
-    y = stlcg.Expression('y', signal[:,:,1:2])
-    return (d2, ((x, y),(x, y)))
-
-def get_coverage_formula_input(signal, circle, device):
-    d2, xy = get_goal_formula_input(signal, circle, device)
-    return (((xy, xy), xy), d2)
-
-def get_test_formula_input(signal, circle, device):
-    signal = signal.to(device)
-    x = stlcg.Expression('x', signal[:,:,:1])
-    y = stlcg.Expression('y', signal[:,:,1:2])
-    v = stlcg.Expression('v', signal[:,:,-1:])
-    return (((x, y),(x, y)), (v,v))
-
-def get_coverage_test_formula_input(signal, circle, device):
-    # (cov & end) & obs
-    d2, xy = get_goal_formula_input(signal, circle, device)
-    stop_in_end_goal_input = get_test_formula_input(signal, circle, device)
-    return ((xy, stop_in_end_goal_input), d2)
-
-

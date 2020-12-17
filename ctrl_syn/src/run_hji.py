@@ -28,7 +28,6 @@ from adversarial import adversarial
 
 import IPython
 
-dt = 0.5
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--iter_max',  type=int, default=500, help="Number of training iterations")
@@ -38,12 +37,15 @@ parser.add_argument('--device',    type=str, default="cpu",    help="cuda or cpu
 parser.add_argument('--dropout',   type=float, default="0.0",   help="dropout probability")
 parser.add_argument('--weight_ctrl',   type=float, default="0.7",   help="weight on ctrl for recon")
 parser.add_argument('--weight_recon',   type=float, default="1.0",   help="weight on recon")
+parser.add_argument('--weight_hji',   type=float, default="-1",   help="weight on hji")
 parser.add_argument('--weight_stl',   type=float, default="0.1",   help="weight on stl")
 parser.add_argument('--teacher_training',   type=float, default="0.1",   help="probability of using previous output in rnn rollout")
 parser.add_argument('--mode',   type=str, default="train",   help="train or eval")
-parser.add_argument('--type',   type=str, default="coverage",   help="goal or coverage")
+parser.add_argument('--type',   type=str, default="goal",   help="goal or coverage")
 parser.add_argument('--stl_scale',   type=float, default="1.0",   help="stlcg scaling parameter")
 parser.add_argument('--status',   type=str, default="new",   help="new or continue(d) run")
+parser.add_argument('--hji_max',   type=float, default="0.2",   help="maximum hji weight")
+parser.add_argument('--hji_min',   type=float, default="0.0",   help="minimum hji weight")
 parser.add_argument('--stl_max',   type=float, default="0.2",   help="maximum stl weight")
 parser.add_argument('--stl_min',   type=float, default="0.1",   help="minimum stl weight")
 parser.add_argument('--scale_max',   type=float, default="50.0",   help="maximum scale weight")
@@ -62,9 +64,13 @@ args = parser.parse_args()
 layout = [
     ('run={:01d}', args.run),
     ('lstm_dim={:02d}', args.lstm_dim),
+    ('dropout={:.2f}', args.dropout),
     ('teacher_training={:.1f}', args.teacher_training),
     ('weight_ctrl={:.1f}', args.weight_ctrl),
     ('weight_recon={:.1f}', args.weight_recon),
+    ('weight_hji={:.1f}', args.weight_hji),
+    ('hji_max={:.1f}', args.hji_max),
+    ('hji_min={:.2f}', args.hji_min),
     ('weight_stl={:.1f}', args.weight_stl),
     ('stl_max={:.1f}', args.stl_max),
     ('stl_min={:.2f}', args.stl_min),
@@ -72,6 +78,7 @@ layout = [
     ('scale_max={:.1f}', args.scale_max),
     ('scale_min={:.2f}', args.scale_min),
     ('iter_max={:.1f}', args.iter_max),
+    ('device={:s}', args.device),
 ]
 
 
@@ -90,9 +97,13 @@ if (args.mode == "train") & os.path.exists(runs_dir) & (args.action != "remove")
     layout = [
         ('run={:01d}', args.run),
         ('lstm_dim={:02d}', args.lstm_dim),
+        ('dropout={:.2f}', args.dropout),
         ('teacher_training={:.1f}', args.teacher_training),
         ('weight_ctrl={:.1f}', args.weight_ctrl),
         ('weight_recon={:.1f}', args.weight_recon),
+        ('weight_hji={:.1f}', args.weight_hji),
+        ('hji_max={:.1f}', args.hji_max),
+        ('hji_min={:.2f}', args.hji_min),
         ('weight_stl={:.1f}', args.weight_stl),
         ('stl_max={:.1f}', args.stl_max),
         ('stl_min={:.2f}', args.stl_min),
@@ -100,6 +111,7 @@ if (args.mode == "train") & os.path.exists(runs_dir) & (args.action != "remove")
         ('scale_max={:.1f}', args.scale_max),
         ('scale_min={:.2f}', args.scale_min),
         ('iter_max={:.1f}', args.iter_max),
+        ('device={:s}', args.device),
     ]
 
     model_name = args.type + "_" + '_'.join([t.format(v) for (t, v) in layout])
@@ -144,41 +156,61 @@ hps_names = ['weight_decay',
              'teacher_training',
              'weight_ctrl',
              'weight_recon',
+             'weight_hji',
              'weight_stl',
              'stl_scale',
              'adv_stl_scale',
              'alpha',
              'stl_type',
+             'coverage_threshold'
              ]
 
 
 hyperparameters = namedtuple('hyperparameters', hps_names)
+
+device = args.device
+vf_cpu =  HJIValueFunction.apply
+if device == "cuda":
+    vf =  HJIValueFunction_cuda.apply
+    dvf = deriv_interp_cuda
+else:
+    vf =  HJIValueFunction.apply
+    dvf = deriv_interp
+
+
 
 b = 80 / (1000.0/args.iter_max)
 c = 6
 if args.teacher_training >= 0.0:
     teacher_training = lambda ep: args.teacher_training
 else:
-    teacher_training = lambda ep: sigmoidal_anneal(ep, 0.1, 0.9, b, c)
+    teacher_training = lambda ep: 0.1 + 0.9*np.exp(ep/b - c) / (1 + np.exp(ep/b - c))
     write_log(log_dir, "Teacher training: min={} max={} b={} c={}".format(0.1, 0.9, b, c))
 
 
+if args.weight_hji >= 0.0:
+    weight_hji = lambda ep: args.weight_hji
+else:
+    c1 = 8
+    weight_hji = lambda ep: args.hji_min + (args.hji_max - args.hji_min) * np.exp(ep/b - c1) / (1 + np.exp(ep/b - c1))
+    write_log(log_dir, "HJI weight: min={} max={} b={} c={}".format(args.hji_min, args.hji_max, b, c1))
+
 if args.weight_stl >= 0.0:
     weight_stl = lambda ep: args.weight_stl
-else:
-    weight_stl = lambda ep: sigmoidal_anneal(ep, args.stl_min, args.stl_max, b, c)
+else:  
+    weight_stl = lambda ep: args.stl_min + (args.stl_max - args.stl_min) * np.exp(ep/b - c) / (1 + np.exp(ep/b - c))
     write_log(log_dir, "STL weight: min={} max={} b={} c={}".format(args.stl_min, args.stl_max, b, c))
 
 if args.stl_scale >= 0.0:
     stl_scale = lambda ep: args.stl_scale
 else:
-    stl_scale = lambda ep: sigmoidal_anneal(ep, args.scale_min, args.scale_max, b, c)
+    stl_scale = lambda ep: args.scale_min + (args.scale_max - args.scale_min) * np.exp(ep/b - c) / (1 + np.exp(ep/b - c))
     write_log(log_dir, "STL scale: min={} max={} b={} c={}".format(args.scale_min, args.scale_max, b, c))
     
 b0 = 80 / (1000.0/args.adv_iter_max)
 c0 = 5
 
-adv_stl_scale = lambda ep: sigmoidal_anneal(ep, args.scale_min, args.scale_max, b0, c0)
+adv_stl_scale = lambda ep: args.scale_min + (args.scale_max - args.scale_min) * np.exp(ep/b0 - c0) / (1 + np.exp(ep/b0 - c0))
 write_log(log_dir, "Adversarial stl scale: min={} max={} b={} c={}".format(args.scale_min, args.scale_max, b0, c0))
 
 
@@ -187,18 +219,45 @@ hps = hyperparameters(weight_decay=0.05,
                       teacher_training=teacher_training,
                       weight_ctrl=args.weight_ctrl,
                       weight_recon=args.weight_recon,
+                      weight_hji=weight_hji,
                       weight_stl=weight_stl,
                       stl_scale=stl_scale,
                       adv_stl_scale=adv_stl_scale,
                       alpha=0.001,
-                      stl_type=args.type)
+                      stl_type=args.type, 
+                      coverage_threshold=21)
 
 
 
 
 # original data
-x_train_, u_train_, stats = prepare_data("../expert/" + args.type + "/train.npy")
-x_eval_, u_eval_, _ = prepare_data("../expert/" + args.type + "/eval.npy")
+x_train_, u_train_, stats = prepare_data("../../hji/data/" + args.type + "/expert_traj_train.npy")
+x_eval_, u_eval_, _ = prepare_data("../../hji/data/" + args.type + "/expert_traj_eval.npy")
+# x_train_, u_train_, stats = prepare_data("../../hji/stlhj/coverage_KinematicCar/traj.npy")
+# x_eval_, u_eval_, _ = prepare_data("../../hji/stlhj/coverage_KinematicCar/traj.npy")
+
+
+ic_train_ = torch.Tensor(InitialConditionDataset(args.trainset_size, vf_cpu, args.type)).float()
+ic_eval_ = torch.tensor(InitialConditionDataset(args.evalset_size, vf_cpu, args.type)).float()
+
+
+# standardized data
+x_train = standardize_data(x_train_, stats[0][:,:,:4], stats[1][:,:,:4])
+u_train = standardize_data(u_train_, stats[0][:,:,4:], stats[1][:,:,4:])
+
+x_eval = standardize_data(x_eval_, stats[0][:,:,:4], stats[1][:,:,:4])
+u_eval = standardize_data(u_eval_, stats[0][:,:,4:], stats[1][:,:,4:])
+
+ic_train = standardize_data(ic_train_, stats[0][:,:,:4], stats[1][:,:,:4])
+ic_eval = standardize_data(ic_eval_, stats[0][:,:,:4], stats[1][:,:,:4])
+
+
+ic_trainloader = torch.utils.data.DataLoader(ic_train, batch_size=args.trainset_size//32, shuffle=True)
+ic_evalloader = torch.utils.data.DataLoader(ic_eval, batch_size=args.evalset_size, shuffle=False)
+
+
+state_dim = ic_eval.shape[-1]
+ctrl_dim = u_eval.shape[-1]
 
 #  setting up environment
 if args.type == "coverage":
@@ -238,28 +297,6 @@ elif args.type == "coverage_test":
              } 
 env = Environment(params)
 
-# initial conditions set
-lower = torch.tensor([env.initial.lower[0], env.initial.lower[1], -np/pi/4, 0])
-upper = torch.tensor([env.initial.upper[0], env.initial.upper[1], np/pi/4, 3])
-
-ic_train_ = torch.Tensor(InitialConditionDataset(args.trainset_size, lower, upper)).float()
-ic_eval_ = torch.tensor(InitialConditionDataset(args.evalset_size, lower, upper)).float()
-
-
-# standardized data
-x_train = standardize_data(x_train_, stats[0][:,:,:4], stats[1][:,:,:4])
-u_train = standardize_data(u_train_, stats[0][:,:,4:], stats[1][:,:,4:])
-
-x_eval = standardize_data(x_eval_, stats[0][:,:,:4], stats[1][:,:,:4])
-u_eval = standardize_data(u_eval_, stats[0][:,:,4:], stats[1][:,:,4:])
-
-ic_train = standardize_data(ic_train_, stats[0][:,:,:4], stats[1][:,:,:4])
-ic_eval = standardize_data(ic_eval_, stats[0][:,:,:4], stats[1][:,:,:4])
-
-
-ic_trainloader = torch.utils.data.DataLoader(ic_train, batch_size=args.trainset_size//32, shuffle=True)
-ic_evalloader = torch.utils.data.DataLoader(ic_eval, batch_size=args.evalset_size, shuffle=False)
-
 
 
 stl_traj = x_train_.permute([1,0,2]).flip(1)
@@ -270,21 +307,28 @@ end_goal = stlcg.Eventually(subformula=stop_in_end_goal)
 coverage = stlcg.Eventually(subformula=(always_inside_circle(env.covers[0], interval=[0,10]) & (stlcg.Expression('speed')  < 1.0)))
 avoid_obs = always_outside_circle(env.obs[0])
 
-formula = stlcg.Until(subformula1=coverage, subformula2=end_goal) & avoid_obs
+stl_formula = stlcg.Until(subformula1=coverage, subformula2=end_goal) & avoid_obs
 
-dynamics = KinematicBicycle(dt)
+
+dynamics = kinematic_bicycle
+
 model = STLPolicy(dynamics, 
+                  state_dim, 
+                  ctrl_dim, 
                   args.lstm_dim, 
                   stats, 
                   env, 
-                  args.dropout).to(device)
+                  vf, 
+                  dvf, 
+                  args.dropout,
+                  dt=0.5).to(device)
 
 
 if args.mode == "train":
     train(model=model,
          train_traj=(x_train, u_train),
          eval_traj=(x_eval, u_eval),
-         formula=formula,
+         formula=stl_formula,
          formula_input_func=lambda s: get_formula_input(s, env.covers[0], env.obs[0], env.final, device, backwards=False),
          train_loader=ic_trainloader,
          eval_loader=ic_evalloader,

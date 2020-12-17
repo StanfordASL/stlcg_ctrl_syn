@@ -36,6 +36,12 @@ def make_directory(dir):
     except FileExistsError:
         print("%s folder already exists"%dir)
 
+def sigmoidal_anneal(ep, lower, upper, b, c):
+    return lower + (upper - lower) * np.exp(ep / b - c) / (1 + np.exp(ep / b - c))
+
+
+
+
 
 # in_end_goal, in_end_goal_input = in_box_stl(stl_traj, env.final, device)
 # stop_in_end_goal, stop_in_end_goal_input = stop_in_box_stl(stl_traj, env.final, device)

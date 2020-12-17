@@ -13,38 +13,18 @@ draw_params = {"initial": {"color": "lightskyblue", "fill": True, "alpha": 0.5},
 
 
 def train(model, train_traj, eval_traj, formula, formula_input_func, train_loader, eval_loader, device, tqdm, writer, hps, save_model_path, number, iter_max=np.inf, status="new"):
-    '''
-    This controls the control logic of the gradient steps
-
-    Inputs:
-    model              : The neural network model (refer to learning.py)               
-    train_traj         : Expert trajectory training set             
-    eval_traj          : Expert trajectory evaluation set         
-    formula            : STL specification to be satisfied  
-    formula_input_func : STL input function corresponding to STL specification
-    train_loader       : PyTorch data loader for initial condition train set
-    eval_loader        : PyTorch data loader for initial condition eval set
-    device             : cpu or cuda
-    tqdm               : progress bar object
-    writer             : Tensorboard writer object
-    hps                : hyperparameters for training (refer to run.py)
-    save_model_path    : path where the model is saved
-    number             : iteration for the training-adversarial loop
-    iter_max           : maximum number of training epochs
-    '''
-    
     log_dir = save_model_path.replace("models", "logs", 1)
     fig_dir = save_model_path.replace("models", "figs", 1)
 
+    coverage = formula.subformula1.subformula1              # (coverage until goal) & avoid obs
+    coverage_input = lambda x: formula_input_func(x)[0][0]
+
     optimizer = torch.optim.Adam(model.parameters(), weight_decay=hps.weight_decay)
     model_name = save_model_path.split("/")[-1]
-
-    # if training from scratch, initialize training steps at 0
     if status == "new":
         train_iteration = 0 # train iteration number
         eval_iteration = 0 # evaluation iteration number
         gradient_step = 0 # descent number
-    # if continuing training the model, load the last iteration values
     elif status == "continue":
         print("\nContinue training model:", save_model_path, "\n")
         checkpoint = torch.load(save_model_path + "/model")
@@ -54,19 +34,18 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
         gradient_step =  checkpoint['gradient_step']
         eval_iteration =  checkpoint['eval_iteration']
 
-    # switch everything to the specified device
+
     x_train, u_train = train_traj[0].to(device), train_traj[1].to(device)
     x_eval, u_eval = eval_traj[0].to(device), eval_traj[1].to(device)
     model = model.to(device)
     model.switch_device(device)
-
-    x_train_ = model.unstandardize_x(x_train)
-    u_train_ = model.unstandardize_u(u_train)
-    x_eval_ = model.unstandardize_x(x_eval)
-    u_eval_ = model.unstandardize_u(u_eval)
-
+    mu_x, sigma_x = model.stats[0][:,:,:4], model.stats[1][:,:,:4]
+    mu_u, sigma_u = model.stats[0][:,:,4:], model.stats[1][:,:,4:]
+    x_train_ = unstandardize_data(x_train, mu_x, sigma_x)
+    u_train_ = unstandardize_data(u_train, mu_u, sigma_u)
+    x_eval_ = unstandardize_data(x_eval, mu_x, sigma_x)
+    u_eval_ = unstandardize_data(u_eval, mu_u, sigma_u)
     T = x_train.shape[0]
-
     with tqdm(total=(iter_max - train_iteration)) as pbar:
         while True:
             if train_iteration == iter_max:
@@ -90,34 +69,36 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                            'ic': ic},
                            save_model_path + "/model_{:02d}".format(number))
                 return
-
-            hps_idx = train_iteration % (iter_max // (number + 1))
             for (batch_idx, ic_) in enumerate(train_loader):
                 
                 optimizer.zero_grad()
-                ic = ic_.to(device).float()        # [bs, 1, x_dim]
+                ic = torch.cat([x_train[:1,:,:], ic_.permute([1,0,2]).to(device).float()], dim=1)    # [1, bs, x_dim]
                 model.train()
-                # parameters
-                teacher_training_value = hps.teacher_training(hps_idx)
-                weight_hji = hps.weight_hji(hps_idx)
-                weight_stl = hps.weight_stl(hps_idx)
-                stl_scale_value = hps.stl_scale(hps_idx)
+                o, u, x_pred = model(x_train)
 
                 # reconstruct the expert model
-                loss_state, loss_ctrl, x_traj_pred, u_traj_pred = model.reconstruction_loss(x_train, u_train, teacher_training=teacher_training_value)
-                loss_recon = loss_state + hps.weight_ctrl * loss_ctrl
+                # teacher_training_value = hps.teacher_training(train_iteration % (iter_max // (number + 1)))
+                teacher_training_value = hps.teacher_training(train_iteration)
 
-                # with new ICs, propagate the trajectories
+                loss_state, loss_ctrl = model.state_control_loss(x_train, x_train, u_train, teacher_training=teacher_training_value)
+                loss_recon = loss_state + hps.weight_ctrl * loss_ctrl
+                # with new ICs, propagate the trajectories and keep them inside the reachable set
                 x_future, u_future = model.propagate_n(T, ic)
                 complete_traj = model.join_partial_future_signal(ic, x_future)      # [time, bs, x_dim]
+                loss_HJI = model.HJI_loss(complete_traj, coverage, coverage_input, absolute_threshold=hps.coverage_threshold)
 
                 # stl loss
-                
+                stl_scale_value = hps.stl_scale(train_iteration % (iter_max // (number + 1)))
                 loss_stl = model.STL_loss(complete_traj, formula, formula_input_func, scale=stl_scale_value)
                 loss_stl_true = model.STL_loss(complete_traj, formula, formula_input_func, scale=-1)
+                loss_spc = model.safety_preserving_loss(complete_traj, u_future, coverage, coverage_input, absolute_threshold=hps.coverage_threshold)
+
 
                 # total loss
-                loss = hps.weight_recon * loss_recon + weight_stl * loss_stl
+
+                weight_hji = hps.weight_hji(train_iteration % (iter_max // (number + 1)))
+                weight_stl = hps.weight_stl(train_iteration % (iter_max // (number + 1)))
+                loss = hps.weight_recon * loss_recon + weight_hji * (loss_HJI + 0.5 * loss_spc)  + weight_stl * loss_stl
                 
                 torch.save({
                    'train_iteration': train_iteration,
@@ -149,6 +130,23 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                     nan_flag = True
                 optimizer.zero_grad()
 
+                loss_HJI.backward(retain_graph=True)
+                if torch.stack([torch.isnan(p.grad).sum() for p in model.parameters()]).sum() > 0:
+                    write_log(log_dir, "Training: Backpropagation through HJI resulted in NaN. Saving data in nan folder")
+                    print("Backpropagation through HJI loss resulted in NaN")
+                    torch.save({
+                               'train_iteration': train_iteration,
+                               'gradient_step': gradient_step,
+                               'eval_iteration': eval_iteration,
+                               'model_state_dict': model.state_dict(),
+                               'optimizer_state_dict': optimizer.state_dict(),
+                               'loss': loss,
+                               'ic': ic},
+                               '../nan/' + model_name + '/model_hji')
+                    np.save('../nan/' + model_name + '/ic_hji.npy', ic)
+                    nan_flag = True
+                optimizer.zero_grad()
+
                 loss_recon.backward(retain_graph=True)
                 if torch.stack([torch.isnan(p.grad).sum() for p in model.parameters()]).sum() > 0:
                     write_log(log_dir, "Training: Backpropagation through recon resulted in NaN. Saving data in nan folder")
@@ -166,59 +164,69 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                     nan_flag = True
                 optimizer.zero_grad()
 
+
+                loss_spc.backward(retain_graph=True)
+                if torch.stack([torch.isnan(p.grad).sum() for p in model.parameters()]).sum() > 0:
+                    write_log(log_dir, "Training: Backpropagation through SPC resulted in NaN. Saving data in nan folder")
+                    print("Backpropagation through SPC loss resulted in NaN")
+                    torch.save({
+                               'train_iteration': train_iteration,
+                               'gradient_step': gradient_step,
+                               'eval_iteration': eval_iteration,
+                               'model_state_dict': model.state_dict(),
+                               'optimizer_state_dict': optimizer.state_dict(),
+                               'loss': loss,
+                               'ic': ic},
+                               '../nan/' + model_name + '/model_stl')
+                    np.save('../nan/' + model_name + '/ic_stl.npy', ic)
+                    nan_flag = True
+                optimizer.zero_grad()
+
                 writer.add_scalar('train/loss/state', loss_state, gradient_step)
                 writer.add_scalar('train/loss/ctrl', loss_ctrl, gradient_step)
+                writer.add_scalar('train/loss/HJI', loss_HJI, gradient_step)
                 writer.add_scalar('train/loss/STL', loss_stl, gradient_step)
                 writer.add_scalar('train/loss/STL_true', loss_stl_true, gradient_step)
+                writer.add_scalar('train/loss/SPC', loss_spc, gradient_step)
+
                 writer.add_scalar('train/loss/total', loss, gradient_step)
                 writer.add_scalar('train/parameters/teacher_training', teacher_training_value, gradient_step)
                 writer.add_scalar('train/parameters/stl_scale', stl_scale_value, gradient_step)
+                writer.add_scalar('train/parameters/weight_hji', weight_hji, gradient_step)
                 writer.add_scalar('train/parameters/weight_stl', weight_stl, gradient_step)
 
-                # plotting progress
-                if batch_idx % 20 == 0:
-                    # trajectories from propagating initial states
-                    traj_np = model.unstandardize_x(complete_traj).cpu().detach().numpy()
-                    # trajectory from propagating initial state of expert trajectory
-                    x_future, u_future = model.propagate_n(T, x_train[:,:1,:])
-                    x_traj_prop = model.join_partial_future_signal(x_train[:,:1,:], x_future)
-                    x_traj_prop = model.unstandardize_x(x_traj_prop).squeeze().detach().cpu().numpy()
-                    # trajectory from teacher training, and used for reconstruction loss (what the training sees)
-                    x_traj_pred = model.unstandardize_x(x_traj_pred)
 
-                    # trajectory plot
+                if batch_idx % 20 == 0:
+                    traj_np = unstandardize_data(complete_traj, mu_x, sigma_x).cpu().detach().numpy()
+                    x_future, u_future = model.propagate_n(T, x_train[:1,:,:])
+                    p = model.join_partial_future_signal(x_train[:1,:,:], x_future)
+                    p = unstandardize_data(p, mu_x, sigma_x).squeeze().detach().cpu().numpy()
+                    x_pred = unstandardize_data(x_pred, mu_x, sigma_x)
                     fig1, ax = plt.subplots(figsize=(10,10))
                     _, ax = model.env.draw2D(ax=ax, kwargs=draw_params)
                     ax.axis("equal")
-
-                    # plotting the sampled initial state trajectories
-                    ax.plot(traj_np[:,:,0].T, traj_np[:,:,1].T, alpha=0.4, c='RoyalBlue')
-                    ax.scatter(traj_np[:,:,0].T, traj_np[:,:,1].T, alpha=0.4, c='RoyalBlue')
-                    # plotting true expert trajectory
-                    ax.plot(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], linewidth=4, c='k', linestyle='--')
-                    ax.scatter(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], s=150, c='k', label="Expert")
-                    # plotting propagated expert trajectory
-                    ax.plot(x_traj_prop[:,0], x_traj_prop[:,1], linewidth=3, c="dodgerblue", linestyle='--', label="Reconstruction")
-                    ax.scatter(x_traj_prop[:,0], x_traj_prop[:,1], s=150, c="dodgerblue")
-                    # plotting predicted expert trajectory during training (with teacher training)
-                    ax.plot(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], linewidth=3, c="IndianRed", linestyle='--', label="Expert recon.")
-                    ax.scatter(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], s=150, c="IndianRed")
+                    # _, ax = plot_hji_contour(ax)
+                    ax.plot(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], linewidth=4)
+                    ax.scatter(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], s=100)
+                    ax.plot(p[:,0], p[:,1], linewidth=4)
+                    ax.scatter(p[:,0], p[:,1], marker='^', s=100)
+                    ax.plot(x_pred.cpu().detach().squeeze().numpy()[:,0], x_pred.cpu().detach().squeeze().numpy()[:,1])
+                    ax.scatter(x_pred.cpu().detach().squeeze().numpy()[:,0], x_pred.cpu().detach().squeeze().numpy()[:,1], marker='*', s=100)
+                    for j in range(traj_np.shape[1]):
+                        ax.plot(traj_np[:,j,0], traj_np[:,j,1])
+                        ax.scatter(traj_np[:,j,0], traj_np[:,j,1])
 
                     ax.set_xlim([-5, 15])
                     ax.set_ylim([-2, 12])
-                    plt.legend(bbox_to_anchor=(1.3, 1))
-
                     writer.add_figure('train/trajectory', fig1, gradient_step)
 
-                    # controls plot
                     fig2, axs = plt.subplots(1,2,figsize=(15,6))
                     for (k,a) in enumerate(axs):
-                        a.plot(u_train_.squeeze().cpu().detach().numpy()[:,k], label="Expert")
-                        a.plot(model.unstandardize_u(u_future).squeeze().cpu().detach().numpy()[:,k], linestyle='--', label="Reconstruction")
+                        a.plot(u_train_.squeeze().cpu().detach().numpy()[:,k])
+                        a.plot(unstandardize_data(u_future, mu_u, sigma_u).squeeze().cpu().detach().numpy()[:,k],'--')
                         a.grid()
-                        a.set_xlim([0,T])
+                        a.set_xlim([0, T])
                         a.set_ylim([-4,4])
-                        plt.legend(bbox_to_anchor=(1.3, 1))
                     writer.add_figure('train/controls', fig2, gradient_step)
 
 
@@ -243,73 +251,61 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
             # evaluation set
             model.eval()
             for (batch_idx, ic_) in enumerate(eval_loader):
-              
-                ic = ic_.to(device).float()        # [bs, 1, x_dim]
-                model.eval()
-
-
-                # reconstruct the expert model
-                loss_state, loss_ctrl, x_traj_pred, u_traj_pred = model.reconstruction_loss(x_eval, u_eval, teacher_training=1.0)
+                ic = torch.cat([x_eval[:1,:,:], ic_.permute([1,0,2]).to(device).float()], dim=1)
+                o, u, x_pred = model(x_eval)
+                loss_state, loss_ctrl = model.state_control_loss(x_eval, x_eval, u_eval, teacher_training=1.0)
                 loss_recon = loss_state + hps.weight_ctrl * loss_ctrl
-
-                # with new ICs, propagate the trajectories
                 x_future, u_future = model.propagate_n(T, ic)
-                complete_traj = model.join_partial_future_signal(ic, x_future)      # [time, bs, x_dim]
-
-                # stl loss
+                complete_traj = model.join_partial_future_signal(ic, x_future)
+                loss_HJI = model.HJI_loss(complete_traj, coverage, coverage_input, absolute_threshold=hps.coverage_threshold)
                 loss_stl = model.STL_loss(complete_traj, formula, formula_input_func, scale=-1)
+                weight_hji = hps.weight_hji(train_iteration)
+                weight_stl = hps.weight_stl(train_iteration)
+                loss_spc = model.safety_preserving_loss(complete_traj, u_future, coverage, coverage_input, absolute_threshold=hps.coverage_threshold)
 
-                # total loss
-                loss = hps.weight_recon * loss_recon + weight_stl * loss_stl
-
+                loss = hps.weight_recon * loss_recon + weight_hji * (loss_HJI + 0.5 * loss_spc) + weight_stl * loss_stl
+                
+                traj_np = unstandardize_data(complete_traj, mu_x, sigma_x).cpu().detach().numpy()
+                x_future, u_future = model.propagate_n(T, x_eval[:1,:,:])
+                p = model.join_partial_future_signal(x_eval[:1,:,:], x_future)
+                p = unstandardize_data(p, mu_x, sigma_x).squeeze().detach().cpu().numpy()
+                
                 writer.add_scalar('eval/state', loss_state, eval_iteration)
                 writer.add_scalar('eval/ctrl', loss_ctrl, eval_iteration)
+                writer.add_scalar('eval/HJI', loss_HJI, eval_iteration)
+                writer.add_scalar('eval/SPC', loss_spc, eval_iteration)
                 writer.add_scalar('eval/STL', loss_stl, eval_iteration)
                 writer.add_scalar('eval/total', loss, eval_iteration)
-
-
-                traj_np = model.unstandardize_x(complete_traj).cpu().detach().numpy()
-                # trajectory from propagating initial state of expert trajectory
-                x_future, u_future = model.propagate_n(T, x_eval[:,:1,:])
-                x_traj_prop = model.join_partial_future_signal(x_eval[:,:1,:], x_future)
-                x_traj_prop = model.unstandardize_x(x_traj_prop).squeeze().detach().cpu().numpy()
-                # trajectory from teacher training, and used for reconstruction loss (what the training sees)
-                x_traj_pred = model.unstandardize_x(x_traj_pred)
+                x_pred = unstandardize_data(x_pred, mu_x, sigma_x)
 
                 fig1, ax = plt.subplots(figsize=(10,10))
                 _, ax = model.env.draw2D(ax=ax, kwargs=draw_params)
                 ax.axis("equal")
-
-                # plotting the sampled initial state trajectories
-                ax.plot(traj_np[:,:,0].T, traj_np[:,:,1].T, alpha=0.4, c='RoyalBlue')
-                ax.scatter(traj_np[:,:,0].T, traj_np[:,:,1].T, alpha=0.4, c='RoyalBlue')
-                # plotting true expert trajectory
-                ax.plot(x_eval_.squeeze().cpu().numpy()[:,0], x_eval_.squeeze().cpu().numpy()[:,1], linewidth=4, c='k', linestyle='--')
-                ax.scatter(x_eval_.squeeze().cpu().numpy()[:,0], x_eval_.squeeze().cpu().numpy()[:,1], s=150, c='k', label="Expert")
-                # plotting propagated expert trajectory
-                ax.plot(x_traj_prop[:,0], x_traj_prop[:,1], linewidth=3, c="dodgerblue", linestyle='--', label="Reconstruction")
-                ax.scatter(x_traj_prop[:,0], x_traj_prop[:,1], s=150, c="dodgerblue")
-                # plotting predicted expert trajectory during training (with teacher training)
-                ax.plot(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], linewidth=3, c="IndianRed", linestyle='--', label="Expert recon.")
-                ax.scatter(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], s=150, c="IndianRed")
+                # _, ax = plot_hji_contour(ax)
+                ax.plot(x_eval_.squeeze().cpu().numpy()[:,0], x_eval_.squeeze().cpu().numpy()[:,1], linewidth=4)
+                ax.scatter(x_eval_.squeeze().cpu().numpy()[:,0], x_eval_.squeeze().cpu().numpy()[:,1], s=100)
+                ax.plot(p[:,0], p[:,1], linewidth=4)
+                ax.scatter(p[:,0], p[:,1], marker='^', s=100)
+                ax.plot(x_pred.squeeze().cpu().detach().numpy()[:,0], x_pred.squeeze().cpu().detach().numpy()[:,1])
+                ax.scatter(x_pred.squeeze().cpu().detach().numpy()[:,0], x_pred.squeeze().cpu().detach().numpy()[:,1], marker='*', s=100)
+                for j in range(traj_np.shape[1]):
+                    ax.plot(traj_np[:,j,0], traj_np[:,j,1])
+                    ax.scatter(traj_np[:,j,0], traj_np[:,j,1])
 
                 ax.set_xlim([-5, 15])
                 ax.set_ylim([-2, 12])
-                plt.legend(bbox_to_anchor=(1.3, 1))
-
                 writer.add_figure('eval/trajectory', fig1, eval_iteration)
                 fig1.savefig(fig_dir + '/eval/number={:02d}_iteration={:03d}.png'.format(number, eval_iteration))
 
+                
                 fig2, axs = plt.subplots(1,2,figsize=(15,6))
                 for (k,a) in enumerate(axs):
-                    a.plot(u_train_.squeeze().cpu().detach().numpy()[:,k], label="Expert")
-                    a.plot(model.unstandardize_u(u_future).squeeze().cpu().detach().numpy()[:,k], linestyle='--', label="Reconstruction")
+                    a.plot(u_train_.squeeze().cpu().detach().numpy()[:,k])
+                    a.plot(unstandardize_data(u_future, mu_u, sigma_u).squeeze().cpu().detach().numpy()[:,k],'--')
                     a.grid()
-                    a.set_xlim([0,T])
+                    a.set_xlim([0, T])
                     a.set_ylim([-4,4])
-                    plt.legend(bbox_to_anchor=(1.3, 1))
                 writer.add_figure('eval/controls', fig2, eval_iteration)
-
 
                 eval_iteration += 1
                 break
