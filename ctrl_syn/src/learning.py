@@ -26,17 +26,17 @@ def save_model(model, optim, epoch, loss, PATH):
                 'optimizer_state_dict': optim.state_dict(),
                 'loss': loss}, PATH)
 
-def prepare_data(npy_file):
+def prepare_data(npy_file, batch_dim=0):
     '''
     data is a numpy of size [time_dim, 7]. The columns are: [t, x, y, psi, V, a, delta]
     This extracts the states and controls and turns them into tensors of size [time_dim, 1, state/ctrl_dim]
     This also outputs the mean and std of the data [1, 1, state+ctrl_dim]
     '''
     data = np.load(npy_file)[:,1:]
-    μ = torch.tensor(np.mean(data, axis=0, keepdims=True)).float().unsqueeze(1).requires_grad_(False)
-    σ = torch.tensor(np.std(data, axis=0, keepdims=True)).float().unsqueeze(1).requires_grad_(False)
-    x = torch.tensor(data[:, :4]).float().unsqueeze(1).requires_grad_(False)
-    u = torch.tensor(data[:, 4:6]).float().unsqueeze(1).requires_grad_(False)
+    μ = torch.tensor(np.mean(data, axis=0, keepdims=True)).float().unsqueeze(batch_dim).requires_grad_(False)
+    σ = torch.tensor(np.std(data, axis=0, keepdims=True)).float().unsqueeze(batch_dim).requires_grad_(False)
+    x = torch.tensor(data[:, :4]).float().unsqueeze(batch_dim).requires_grad_(False)
+    u = torch.tensor(data[:, 4:6]).float().unsqueeze(batch_dim).requires_grad_(False)
     return x, u, [μ, σ]
 
 
@@ -285,29 +285,29 @@ class STLPolicy(torch.nn.Module):
         '''
         # no teacher training, relying on ground truth
         if teacher_training == 0.0:
-            o, u_pred, x_pred = self.forward(x)
+            o, u_pred, x_pred = self.forward(x_true)
             x_pred = self.join_partial_future_signal(x_true[:,:1,:], x_pred[:,:-1,:])
-            return self.L2loss(x_pred, x_true), self.L2loss(u_pred, u_true)
+            return self.L2loss(x_pred, x_true), self.L2loss(u_pred, u_true), x_pred, u_pred
         else:
-            prob = np.random.rand(x.shape[0]-1) < teacher_training
+            prob = np.random.rand(x_true.shape[1]-1) < teacher_training
             xs = []
             us = []
-            xs.append(x[:,:1,:])
+            xs.append(x_true[:,:1,:])
             x_input = xs[-1]
-            for t in range(x.shape[0]-1):
+            for t in range(x_true.shape[1]-1):
                 o, u, x_next = self.forward(x_input)
                 xs.append(x_next)
                 us.append(u)
                 if prob[t]:
                     x_input = x_next
                 else:
-                    x_input = x[:,t+1:t+2,:]
+                    x_input = x_true[:,t+1:t+2,:]
             xx = torch.cat(xs, time_dim)
             o, u, _ = self.forward(x_input)
             us.append(u)
             uu = torch.cat(us, time_dim)
             # ignoring the first time step since there will be no error
-            recon_state_loss = self.L2loss(xx[1:,:,:], x_true[1:,:,:])
+            recon_state_loss = self.L2loss(xx[:,1:,:], x_true[:,1:,:])
             recon_ctrl_loss = self.L2loss(uu, u_true)
             return recon_state_loss, recon_ctrl_loss, xx, uu
 
@@ -317,7 +317,7 @@ class STLPolicy(torch.nn.Module):
         return torch.cat([x_partial, x_future], time_dim)
 
     def STL_robustness(self, x, formula, formula_input, **kwargs):
-        signal = self.unstandardize_x(x).permute([1,0,2])    # [bs, time_dim, state_dim]
+        signal = self.unstandardize_x(x)    # [bs, time_dim, state_dim]
         return formula.robustness(formula_input(signal), **kwargs)
 
     def STL_loss(self, x, formula, formula_input, **kwargs):

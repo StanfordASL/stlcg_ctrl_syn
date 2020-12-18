@@ -4,6 +4,7 @@ sys.path.append('../../expert_demo_ros/src/utils')
 sys.path.append('..')
 
 import stlcg
+import stlviz
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -23,7 +24,9 @@ from environment import *
 from src.learning import *
 from learning import *
 from utils import *
+from stl import *
 from train import train
+from test import test
 from adversarial import adversarial
 
 import IPython
@@ -40,7 +43,7 @@ parser.add_argument('--weight_ctrl',   type=float, default="0.7",   help="weight
 parser.add_argument('--weight_recon',   type=float, default="1.0",   help="weight on recon")
 parser.add_argument('--weight_stl',   type=float, default="0.1",   help="weight on stl")
 parser.add_argument('--teacher_training',   type=float, default="0.1",   help="probability of using previous output in rnn rollout")
-parser.add_argument('--mode',   type=str, default="train",   help="train or eval")
+parser.add_argument('--mode',   type=str, default="train",   help="train or eval, or test for debugging")
 parser.add_argument('--type',   type=str, default="coverage",   help="goal or coverage")
 parser.add_argument('--stl_scale',   type=float, default="1.0",   help="stlcg scaling parameter")
 parser.add_argument('--status',   type=str, default="new",   help="new or continue(d) run")
@@ -57,7 +60,7 @@ parser.add_argument('--adv_iter_max',   type=int, default="100",   help="number 
 
 
 args = parser.parse_args()
-
+device = args.device
 
 layout = [
     ('run={:01d}', args.run),
@@ -202,11 +205,11 @@ x_eval_, u_eval_, _ = prepare_data("../expert/" + args.type + "/eval.npy")
 
 #  setting up environment
 if args.type == "coverage":
-    params = {  "covers": [Box([0., 6.],[4, 8.]), Box([6., 2.],[10.0, 4.0])],
-                "obstacles": [Circle([7., 7.], 2.0)],
-                "initial": Box([-1., -1.],[1., 1.]),
-                "final": Box([9.0, 9.0],[11.0, 11.0])
-           }
+    params = { "covers": [Circle([8., 3.0], 2.0)],
+               "obstacles": [Circle([4.5, 6.], 1.5)],
+               "initial": Box([0., 0.],[3., 3.]),
+               "final": Circle([1., 9.], 1.0)
+             } 
 elif args.type == "goal":
     params = {  "covers": [],
                 "obstacles": [Circle([7., 7.], 2.0)],
@@ -220,30 +223,15 @@ elif args.type == "test":
                 "initial": Box([-1., -1.],[1., 1.]),
                 "final": Box([4.0, 4.0],[6.0, 6.0])
            } 
-elif args.type == "coverage_test":
-    # params = {  "covers": [Box([0., 6.],[4, 8.])],
-    #             "obstacles": [Circle([7., 7.], 2.0)],
-    #             "initial": Box([-1., -1.],[1., 1.]),
-    #             "final": Box([9.0, 9.0],[11.0, 11.0])
-    #        }
-    # params = { "covers": [Circle([2.5, 5.0], 1.0)],
-    #     "obstacles": [Circle([4.5, 6.], 1.0)],
-    #     "initial": Box([0., 0.],[3., 3.]),
-    #     "final": Circle([7., 7.], 1.0)
-    #   } 
-    params = { "covers": [Circle([8., 3.0], 2.0)],
-               "obstacles": [Circle([4.5, 6.], 1.5)],
-               "initial": Box([0., 0.],[3., 3.]),
-               "final": Circle([1., 9.], 1.0)
-             } 
+             
 env = Environment(params)
 
 # initial conditions set
-lower = torch.tensor([env.initial.lower[0], env.initial.lower[1], -np/pi/4, 0])
-upper = torch.tensor([env.initial.upper[0], env.initial.upper[1], np/pi/4, 3])
+lower = torch.tensor([env.initial.lower[0], env.initial.lower[1], -np.pi/4, 0])
+upper = torch.tensor([env.initial.upper[0], env.initial.upper[1], np.pi/4, 3])
 
-ic_train_ = torch.Tensor(InitialConditionDataset(args.trainset_size, lower, upper)).float()
-ic_eval_ = torch.tensor(InitialConditionDataset(args.evalset_size, lower, upper)).float()
+ic_train_ = initial_conditions(args.trainset_size, lower, upper)
+ic_eval_ = initial_conditions(args.evalset_size, lower, upper)
 
 
 # standardized data
@@ -261,16 +249,15 @@ ic_trainloader = torch.utils.data.DataLoader(ic_train, batch_size=args.trainset_
 ic_evalloader = torch.utils.data.DataLoader(ic_eval, batch_size=args.evalset_size, shuffle=False)
 
 
-
-stl_traj = x_train_.permute([1,0,2]).flip(1)
-
-in_end_goal = inside_circle(env.final)
+in_end_goal = inside_circle(env.final, "distance to final")
 stop_in_end_goal = in_end_goal & (stlcg.Expression('speed')  < 0.5)
 end_goal = stlcg.Eventually(subformula=stop_in_end_goal)
-coverage = stlcg.Eventually(subformula=(always_inside_circle(env.covers[0], interval=[0,10]) & (stlcg.Expression('speed')  < 1.0)))
-avoid_obs = always_outside_circle(env.obs[0])
+coverage = stlcg.Eventually(subformula=(always_inside_circle(env.covers[0], "distance to coverage", interval=[0,10]) & (stlcg.Expression('speed')  < 1.0)))
+avoid_obs = always_outside_circle(env.obs[0], "distance to obstacle")
 
 formula = stlcg.Until(subformula1=coverage, subformula2=end_goal) & avoid_obs
+stl_graph = stlviz.make_stl_graph(formula)
+stlviz.save_graph(stl_graph, fig_dir + "/stl")
 
 dynamics = KinematicBicycle(dt)
 model = STLPolicy(dynamics, 
@@ -280,7 +267,17 @@ model = STLPolicy(dynamics,
                   args.dropout).to(device)
 
 
-if args.mode == "train":
+if args.mode == "test":
+    test(model=model, 
+         train_traj=(x_train, u_train), 
+         formula=formula, 
+         formula_input_func=lambda s: get_formula_input(s, env.covers[0], env.obs[0], env.final, device, backwards=False),
+         train_loader=ic_trainloader,
+         device=device)
+
+    write_log(log_dir, "Testing: done!")
+
+elif args.mode == "train":
     train(model=model,
          train_traj=(x_train, u_train),
          eval_traj=(x_eval, u_eval),

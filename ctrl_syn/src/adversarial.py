@@ -10,7 +10,6 @@ from utils import *
 
 
 draw_params = {"initial": {"color": "lightskyblue", "fill": True, "alpha": 0.5}, "final": {"color": "coral", "fill": True, "alpha": 0.5}, "covers": {"color": "black", "fill": False}, "obs": {"color": "red", "fill": True, "alpha": 0.5} }
-vf_cpu =  HJIValueFunction.apply
 
 
 

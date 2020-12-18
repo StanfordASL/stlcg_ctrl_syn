@@ -32,7 +32,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
     number             : iteration for the training-adversarial loop
     iter_max           : maximum number of training epochs
     '''
-    
+
     log_dir = save_model_path.replace("models", "logs", 1)
     fig_dir = save_model_path.replace("models", "figs", 1)
 
@@ -65,7 +65,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
     x_eval_ = model.unstandardize_x(x_eval)
     u_eval_ = model.unstandardize_u(u_eval)
 
-    T = x_train.shape[0]
+    T = x_train.shape[1] + 10
 
     with tqdm(total=(iter_max - train_iteration)) as pbar:
         while True:
@@ -99,7 +99,6 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 model.train()
                 # parameters
                 teacher_training_value = hps.teacher_training(hps_idx)
-                weight_hji = hps.weight_hji(hps_idx)
                 weight_stl = hps.weight_stl(hps_idx)
                 stl_scale_value = hps.stl_scale(hps_idx)
 
@@ -109,7 +108,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
 
                 # with new ICs, propagate the trajectories
                 x_future, u_future = model.propagate_n(T, ic)
-                complete_traj = model.join_partial_future_signal(ic, x_future)      # [time, bs, x_dim]
+                complete_traj = model.join_partial_future_signal(ic, x_future)      # [bs, time_dim, x_dim]
 
                 # stl loss
                 
@@ -196,17 +195,16 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                     ax.scatter(traj_np[:,:,0].T, traj_np[:,:,1].T, alpha=0.4, c='RoyalBlue')
                     # plotting true expert trajectory
                     ax.plot(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], linewidth=4, c='k', linestyle='--')
-                    ax.scatter(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], s=150, c='k', label="Expert")
+                    ax.scatter(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], s=100, c='k', label="Expert")
                     # plotting propagated expert trajectory
-                    ax.plot(x_traj_prop[:,0], x_traj_prop[:,1], linewidth=3, c="dodgerblue", linestyle='--', label="Reconstruction")
-                    ax.scatter(x_traj_prop[:,0], x_traj_prop[:,1], s=150, c="dodgerblue")
+                    ax.plot(x_traj_prop[:,0], x_traj_prop[:,1], linewidth=3, c="green", linestyle='--', label="Reconstruction")
+                    ax.scatter(x_traj_prop[:,0], x_traj_prop[:,1], s=100, c="green")
                     # plotting predicted expert trajectory during training (with teacher training)
                     ax.plot(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], linewidth=3, c="IndianRed", linestyle='--', label="Expert recon.")
-                    ax.scatter(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], s=150, c="IndianRed")
+                    ax.scatter(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], s=100, c="IndianRed")
 
                     ax.set_xlim([-5, 15])
                     ax.set_ylim([-2, 12])
-                    plt.legend(bbox_to_anchor=(1.3, 1))
 
                     writer.add_figure('train/trajectory', fig1, gradient_step)
 
@@ -218,7 +216,6 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                         a.grid()
                         a.set_xlim([0,T])
                         a.set_ylim([-4,4])
-                        plt.legend(bbox_to_anchor=(1.3, 1))
                     writer.add_figure('train/controls', fig2, gradient_step)
 
 
@@ -285,17 +282,16 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 ax.scatter(traj_np[:,:,0].T, traj_np[:,:,1].T, alpha=0.4, c='RoyalBlue')
                 # plotting true expert trajectory
                 ax.plot(x_eval_.squeeze().cpu().numpy()[:,0], x_eval_.squeeze().cpu().numpy()[:,1], linewidth=4, c='k', linestyle='--')
-                ax.scatter(x_eval_.squeeze().cpu().numpy()[:,0], x_eval_.squeeze().cpu().numpy()[:,1], s=150, c='k', label="Expert")
+                ax.scatter(x_eval_.squeeze().cpu().numpy()[:,0], x_eval_.squeeze().cpu().numpy()[:,1], s=100, c='k', label="Expert")
                 # plotting propagated expert trajectory
-                ax.plot(x_traj_prop[:,0], x_traj_prop[:,1], linewidth=3, c="dodgerblue", linestyle='--', label="Reconstruction")
-                ax.scatter(x_traj_prop[:,0], x_traj_prop[:,1], s=150, c="dodgerblue")
+                ax.plot(x_traj_prop[:,0], x_traj_prop[:,1], linewidth=3, c="green", linestyle='--', label="Reconstruction")
+                ax.scatter(x_traj_prop[:,0], x_traj_prop[:,1], s=100, c="green")
                 # plotting predicted expert trajectory during training (with teacher training)
                 ax.plot(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], linewidth=3, c="IndianRed", linestyle='--', label="Expert recon.")
-                ax.scatter(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], s=150, c="IndianRed")
+                ax.scatter(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], s=100, c="IndianRed")
 
                 ax.set_xlim([-5, 15])
                 ax.set_ylim([-2, 12])
-                plt.legend(bbox_to_anchor=(1.3, 1))
 
                 writer.add_figure('eval/trajectory', fig1, eval_iteration)
                 fig1.savefig(fig_dir + '/eval/number={:02d}_iteration={:03d}.png'.format(number, eval_iteration))
@@ -307,7 +303,6 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                     a.grid()
                     a.set_xlim([0,T])
                     a.set_ylim([-4,4])
-                    plt.legend(bbox_to_anchor=(1.3, 1))
                 writer.add_figure('eval/controls', fig2, eval_iteration)
 
 

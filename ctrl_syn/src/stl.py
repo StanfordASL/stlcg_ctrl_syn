@@ -9,33 +9,23 @@ import numpy as np
 import torch
 from environment import *
 
-stl_traj = x_train_.permute([1,0,2]).flip(1)
-
-in_end_goal = inside_circle(env.final)
-stop_in_end_goal = in_end_goal & (stlcg.Expression('speed')  < 0.5)
-end_goal = stlcg.Eventually(subformula=stop_in_end_goal)
-coverage = stlcg.Eventually(subformula=(always_inside_circle(env.covers[0], interval=[0,10]) & (stlcg.Expression('speed')  < 1.0)))
-avoid_obs = always_outside_circle(env.obs[0])
-
-stl_formula = stlcg.Until(subformula1=coverage, subformula2=end_goal) & avoid_obs
 
 
+def inside_circle(cover, name):
+    return stlcg.Expression(name) < cover.radius**2
 
-def inside_circle(cover):
-    return stlcg.Expression('d2_to_coverage') < cover.radius**2
+def always_inside_circle(cover, name, interval=[0,5]):
+    return stlcg.Always(subformula=inside_circle(cover, name), interval=interval)
 
-def always_inside_circle(cover, interval=[0,5]):
-    return stlcg.Always(subformula=inside_circle(cover), interval=interval)
+def outside_circle(circle, name):
+    return stlcg.Negation(subformula=inside_circle(circle, name))
 
-def outside_circle(circle):
-    return stlcg.Negation(subformula=inside_circle(circle))
+def always_outside_circle(circle, name, interval=None):
+    return stlcg.Always(subformula=outside_circle(circle, name), interval=interval)
 
-def always_outside_circle(circle, interval=None):
-    return stlcg.Always(subformula=outside_circle(circle), interval=interval)
-
-def circle_input(signal, cover, device='cpu', backwards=False):
+def circle_input(signal, cover, device='cpu', backwards=False, time_dim=1):
     if not backwards:
-        signal = signal.flip(1)
+        signal = signal.flip(time_dim)
     return (signal[:,:,:2].to(device) - torch.tensor(cover.center).to(device)).pow(2).sum(-1, keepdim=True)
 
 def speed_input(signal, device='cpu', backwards=False):
