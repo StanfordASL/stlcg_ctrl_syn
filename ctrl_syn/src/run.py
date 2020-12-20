@@ -228,7 +228,7 @@ env = Environment(params)
 
 # initial conditions set
 lower = torch.tensor([env.initial.lower[0], env.initial.lower[1], -np.pi/4, 0])
-upper = torch.tensor([env.initial.upper[0], env.initial.upper[1], np.pi/4, 3])
+upper = torch.tensor([env.initial.upper[0], env.initial.upper[1], np.pi/4, 2])
 
 ic_train_ = initial_conditions(args.trainset_size, lower, upper)
 ic_eval_ = initial_conditions(args.evalset_size, lower, upper)
@@ -251,7 +251,7 @@ ic_evalloader = torch.utils.data.DataLoader(ic_eval, batch_size=args.evalset_siz
 
 in_end_goal = inside_circle(env.final, "distance to final")
 stop_in_end_goal = in_end_goal & (stlcg.Expression('speed')  < 0.5)
-end_goal = stlcg.Eventually(subformula=stop_in_end_goal)
+end_goal = stlcg.Eventually(subformula=stlcg.Always(stop_in_end_goal))
 coverage = stlcg.Eventually(subformula=(always_inside_circle(env.covers[0], "distance to coverage", interval=[0,10]) & (stlcg.Expression('speed')  < 1.0)))
 avoid_obs = always_outside_circle(env.obs[0], "distance to obstacle")
 
@@ -310,15 +310,17 @@ elif args.mode == "adversarial":
     # adv_ic is [bs, 1, x_dim], cpu in unstandardized form
 
     adv_ic = adversarial(model=model, 
-                         T=x_train.shape[0]+4, 
+                         T=x_train.shape[1]+4, 
                          formula=formula,
-                         formula_input_func=lambda s, c: get_formula_input(s,c, device),
+                         formula_input_func=lambda s: get_formula_input(s, env.covers[0], env.obs[0], env.final, device, backwards=False),
                          device=device,
                          tqdm=tqdm.tqdm, 
                          writer=SummaryWriter(log_dir=runs_dir), 
                          hps=hps, 
                          save_model_path=model_dir, 
                          number=args.number,
+                         lower=lower,
+                         upper=upper,
                          iter_max=args.adv_iter_max,
                          adv_n_samples=64)
 

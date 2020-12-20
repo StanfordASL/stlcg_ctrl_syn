@@ -111,22 +111,23 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 complete_traj = model.join_partial_future_signal(ic, x_future)      # [bs, time_dim, x_dim]
 
                 # stl loss
-                
                 loss_stl = model.STL_loss(complete_traj, formula, formula_input_func, scale=stl_scale_value)
                 loss_stl_true = model.STL_loss(complete_traj, formula, formula_input_func, scale=-1)
 
                 # total loss
                 loss = hps.weight_recon * loss_recon + weight_stl * loss_stl
-                
-                torch.save({
-                   'train_iteration': train_iteration,
-                   'gradient_step': gradient_step,
-                   'eval_iteration': eval_iteration,
-                   'model_state_dict': model.state_dict(),
-                   'optimizer_state_dict': optimizer.state_dict(),
-                   'loss': loss,
-                   'ic': ic},
-                   save_model_path + "/model")
+
+                if (train_iteration % 10) == 0:
+                    
+                    torch.save({
+                       'train_iteration': train_iteration,
+                       'gradient_step': gradient_step,
+                       'eval_iteration': eval_iteration,
+                       'model_state_dict': model.state_dict(),
+                       'optimizer_state_dict': optimizer.state_dict(),
+                       'loss': loss,
+                       'ic': ic},
+                       save_model_path + "/model")
 
 
                 nan_flag = False
@@ -144,7 +145,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                                'loss': loss,
                                'ic': ic},
                                '../nan/' + model_name + '/model_stl')
-                    np.save('../nan/' + model_name + '/ic_stl.npy', ic)
+                    np.save('../nan/' + model_name + '/ic_stl.npy', ic.cpu())
                     nan_flag = True
                 optimizer.zero_grad()
 
@@ -161,7 +162,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                                'loss': loss,
                                'ic': ic},
                                '../nan/' + model_name + '/model_recon')
-                    np.save('../nan/' + model_name + '/ic_recon.npy', ic)
+                    np.save('../nan/' + model_name + '/ic_recon.npy', ic.cpu())
                     nan_flag = True
                 optimizer.zero_grad()
 
@@ -194,17 +195,17 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                     ax.plot(traj_np[:,:,0].T, traj_np[:,:,1].T, alpha=0.4, c='RoyalBlue')
                     ax.scatter(traj_np[:,:,0].T, traj_np[:,:,1].T, alpha=0.4, c='RoyalBlue')
                     # plotting true expert trajectory
-                    ax.plot(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], linewidth=4, c='k', linestyle='--')
-                    ax.scatter(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], s=100, c='k', label="Expert")
+                    ax.plot(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], linewidth=4, c='k', linestyle='--', zorder=2)
+                    ax.scatter(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], s=100, c='k', label="Expert", zorder=3)
                     # plotting propagated expert trajectory
-                    ax.plot(x_traj_prop[:,0], x_traj_prop[:,1], linewidth=3, c="green", linestyle='--', label="Reconstruction")
-                    ax.scatter(x_traj_prop[:,0], x_traj_prop[:,1], s=100, c="green")
+                    ax.plot(x_traj_prop[:,0], x_traj_prop[:,1], linewidth=3, c="dodgerblue", linestyle='--', label="Reconstruction", zorder=4)
+                    ax.scatter(x_traj_prop[:,0], x_traj_prop[:,1], s=100, c="dodgerblue", zorder=5)
                     # plotting predicted expert trajectory during training (with teacher training)
-                    ax.plot(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], linewidth=3, c="IndianRed", linestyle='--', label="Expert recon.")
-                    ax.scatter(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], s=100, c="IndianRed")
+                    ax.plot(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], linewidth=3, c="IndianRed", linestyle='--', label="Expert recon.", zorder=6)
+                    ax.scatter(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], s=100, c="IndianRed", zorder=7)
 
                     ax.set_xlim([-5, 15])
-                    ax.set_ylim([-2, 12])
+                    ax.set_ylim([-5, 15])
 
                     writer.add_figure('train/trajectory', fig1, gradient_step)
 
@@ -227,6 +228,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 gradient_step += 1
 
             fig1.savefig(fig_dir + '/train/number={:02d}_iteration={:03d}.png'.format(number, train_iteration))
+
             torch.save({
                         'train_iteration': train_iteration,
                         'gradient_step': gradient_step,
@@ -280,18 +282,18 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 # plotting the sampled initial state trajectories
                 ax.plot(traj_np[:,:,0].T, traj_np[:,:,1].T, alpha=0.4, c='RoyalBlue')
                 ax.scatter(traj_np[:,:,0].T, traj_np[:,:,1].T, alpha=0.4, c='RoyalBlue')
-                # plotting true expert trajectory
-                ax.plot(x_eval_.squeeze().cpu().numpy()[:,0], x_eval_.squeeze().cpu().numpy()[:,1], linewidth=4, c='k', linestyle='--')
-                ax.scatter(x_eval_.squeeze().cpu().numpy()[:,0], x_eval_.squeeze().cpu().numpy()[:,1], s=100, c='k', label="Expert")
+                 # plotting true expert trajectory
+                ax.plot(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], linewidth=4, c='k', linestyle='--', zorder=2)
+                ax.scatter(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], s=100, c='k', label="Expert", zorder=3)
                 # plotting propagated expert trajectory
-                ax.plot(x_traj_prop[:,0], x_traj_prop[:,1], linewidth=3, c="green", linestyle='--', label="Reconstruction")
-                ax.scatter(x_traj_prop[:,0], x_traj_prop[:,1], s=100, c="green")
+                ax.plot(x_traj_prop[:,0], x_traj_prop[:,1], linewidth=3, c="dodgerblue", linestyle='--', label="Reconstruction", zorder=4)
+                ax.scatter(x_traj_prop[:,0], x_traj_prop[:,1], s=100, c="dodgerblue", zorder=5)
                 # plotting predicted expert trajectory during training (with teacher training)
-                ax.plot(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], linewidth=3, c="IndianRed", linestyle='--', label="Expert recon.")
-                ax.scatter(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], s=100, c="IndianRed")
+                ax.plot(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], linewidth=3, c="IndianRed", linestyle='--', label="Expert recon.", zorder=6)
+                ax.scatter(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], s=100, c="IndianRed", zorder=7)
 
                 ax.set_xlim([-5, 15])
-                ax.set_ylim([-2, 12])
+                ax.set_ylim([-5, 15])
 
                 writer.add_figure('eval/trajectory', fig1, eval_iteration)
                 fig1.savefig(fig_dir + '/eval/number={:02d}_iteration={:03d}.png'.format(number, eval_iteration))
