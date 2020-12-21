@@ -95,7 +95,7 @@ def adversarial(model, T, formula, formula_input_func, device, tqdm, writer, hps
                         write_log(log_dir, "Adversarial: Line search took {} search steps.".format(count))
 
                         breakpoint()
-                
+
 
                 ic_var.grad.zero_()
 
@@ -104,9 +104,11 @@ def adversarial(model, T, formula, formula_input_func, device, tqdm, writer, hps
             ax1.scatter(ic_var_un[:,:,0], ic_var_un[:,:,1], s=25, c='grey', zorder=15)
             ax2.scatter(ic_var_un[:,:,2], th_y, s=25, c='grey', zorder=15)
             ax3.scatter(ic_var_un[:,:,3], th_y, s=25, c='grey', zorder=15)
+            fig.savefig(fig_dir + '/adversarial/ic_number={:02d}_iteration={:03d}.png'.format(number, (iter_max * number) + iteration))
+
             loss_stl_true = model.adversarial_STL_loss(complete_traj, formula, formula_input_func, scale=-1)
             writer.add_scalar('adversarial/stl_true', loss_stl_true, (iter_max * number) + iteration)
-            writer.add_scalar('adversarial/stl_soft', loss_stl, (iter_max * number) + iteration)        
+            writer.add_scalar('adversarial/stl_soft', loss_stl, (iter_max * number) + iteration)
             writer.add_scalar('adversarial/stl_scale', hps.adv_stl_scale(iteration), (iter_max * number) + iteration)
             writer.add_figure('adversarial/initial_states', fig, (iter_max * number) + iteration)
 
@@ -124,7 +126,7 @@ def adversarial(model, T, formula, formula_input_func, device, tqdm, writer, hps
 
             ax.set_xlim([-5, 15])
             ax.set_ylim([-5, 15])
-            fig1.savefig(fig_dir + '/adversarial/number={:02d}_iteration={:03d}.png'.format(number, (iter_max * number) + iteration))
+            fig1.savefig(fig_dir + '/adversarial/traj_number={:02d}_iteration={:03d}.png'.format(number, (iter_max * number) + iteration))
 
             writer.add_figure('adversarial/trajectory', fig1, iteration)
 
@@ -135,7 +137,7 @@ def adversarial(model, T, formula, formula_input_func, device, tqdm, writer, hps
 
     violating_idx = stl.squeeze() < 0
 
-    
+
     if violating_idx.sum() == 0.0:
         print("No violating initial conditions")
         return adv_ic
