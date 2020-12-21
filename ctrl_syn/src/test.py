@@ -29,9 +29,9 @@ def test(model, train_traj, formula, formula_input_func, train_loader, device):
     Function to test if all the functions are working as expected.
 
     Inputs:
-    model              : The neural network model (refer to learning.py)               
-    train_traj         : Expert trajectory training set             
-    formula            : STL specification to be satisfied  
+    model              : The neural network model (refer to learning.py)
+    train_traj         : Expert trajectory training set
+    formula            : STL specification to be satisfied
     formula_input_func : STL input function corresponding to STL specification
     train_loader       : PyTorch data loader for initial condition train set
     device             : cpu or cuda
@@ -51,7 +51,7 @@ def test(model, train_traj, formula, formula_input_func, train_loader, device):
     T = x_train.shape[1]
 
     for (batch_idx, ic_) in enumerate(train_loader):
-        
+
         optimizer.zero_grad()
         ic = ic_.to(device).float()        # [bs, 1, x_dim]
         model.train()
@@ -74,7 +74,7 @@ def test(model, train_traj, formula, formula_input_func, train_loader, device):
 
         # total loss
         loss = loss_recon + weight_stl * loss_stl
-        
+
         # plotting progress
         if batch_idx % 20 == 0:
             # trajectories from propagating initial states
@@ -200,7 +200,7 @@ def adversarial(model, T, formula, formula_input_func, device, save_model_path, 
                 if count > (lr // alpha) * 1.5:
                     write_log(log_dir, "Adversarial: Line search took {} search steps.".format(count))
                     breakpoint()
-            
+
 
             ic_var.grad.zero_()
         print("Iteration {}".format(iteration))
@@ -229,7 +229,7 @@ def adversarial(model, T, formula, formula_input_func, device, save_model_path, 
         ax.axis("equal")
 
         fig1.savefig("../figs/test/adversarial_traj_{:03d}.png".format( iteration))
-    
+
     fig.savefig("../figs/test/adversarial_ic_{:03d}.png".format( iteration))
 
 
@@ -237,7 +237,7 @@ def adversarial(model, T, formula, formula_input_func, device, save_model_path, 
     print(stl.squeeze().detach().cpu().numpy())
     violating_idx = stl.squeeze() < 0
 
-    
+
     if violating_idx.sum() == 0.0:
         print("No violating initial conditions")
         return adv_ic
@@ -256,7 +256,7 @@ if __name__ == "__main__":
            "obstacles": [Circle([4.5, 6.], 1.5)],
            "initial": Box([0., 0.],[3., 3.]),
            "final": Circle([1., 9.], 1.0)
-            }   
+            }
     env = Environment(env)
     device = "cpu"
     x_train_, u_train_, stats = prepare_data("../expert/coverage/train.npy")
