@@ -79,16 +79,16 @@ class EnvironmentVizualization(object):
         self.pub = rospy.Publisher("/environment/visualization", MarkerArray, queue_size=10)
         self.init_pub = rospy.Publisher("/environment/visualization/initial_set", Point, queue_size=10)
         self.marker_array = MarkerArray()
-        
+        self.env = env
         init_center = env.initial.center()
         self.initial_state_offset = Point(init_center[0], init_center[1], 0.0)
 
 
 
-
+    def update_markers(self):
 
         fill = True
-        for (i, obs) in enumerate(env.obs):
+        for (i, obs) in enumerate(self.env.obs):
             if isinstance(obs, Circle):
                 self.marker_array.markers.append(circle_marker(obs, fill, "obstacle", i, [1,0,0]))
             elif isinstance(obs, Box):
@@ -97,7 +97,7 @@ class EnvironmentVizualization(object):
                 raise TypeError("Obstacle type unknown for marker construction")
 
         fill = False
-        for (i, covers) in enumerate(env.covers):
+        for (i, covers) in enumerate(self.env.covers):
             if isinstance(covers, Circle):
                 self.marker_array.markers.append(circle_marker(covers, fill, "coverage", i, [0,0,1]))
             elif isinstance(covers, Box):
@@ -108,26 +108,33 @@ class EnvironmentVizualization(object):
         fill = True
         alpha = 0.5
         rgb = [135.0/255, 206.0/255, 250.0/255]
-        if isinstance(env.initial, Circle):
-            self.marker_array.markers.append(circle_marker(env.initial, fill, "initial", 0, rgb, alpha=alpha))
-        elif isinstance(env.initial, Box):
-            self.marker_array.markers.append(box_marker(env.initial, fill, "initial", 0, rgb, alpha=alpha))
+        if isinstance(self.env.initial, Circle):
+            self.marker_array.markers.append(circle_marker(self.env.initial, fill, "initial", 0, rgb, alpha=alpha))
+        elif isinstance(self.env.initial, Box):
+            self.marker_array.markers.append(box_marker(self.env.initial, fill, "initial", 0, rgb, alpha=alpha))
         else:
             raise TypeError("Initial type unknown for marker construction")
 
         rgb = [240.0/255, 128.0/255, 128.0/255]
-        if isinstance(env.final, Circle):
-            self.marker_array.markers.append(circle_marker(env.final, fill, "final", 0, rgb, alpha=alpha))
-        elif isinstance(env.final, Box):
-            self.marker_array.markers.append(box_marker(env.final, fill, "final", 0, rgb, alpha=alpha))
+        if isinstance(self.env.final, Circle):
+            self.marker_array.markers.append(circle_marker(self.env.final, fill, "final", 0, rgb, alpha=alpha))
+        elif isinstance(self.env.final, Box):
+            self.marker_array.markers.append(box_marker(self.env.final, fill, "final", 0, rgb, alpha=alpha))
         else:
             raise TypeError("Initial type unknown for marker construction")
 
-
+    def update_env(self):
+        # update coverage and obstacle x positions
+        cov_x = rospy.get_param("cov_x", self.env.covers[0].center[0])
+        final_x = self.env.final.center[0]
+        self.env.covers[0].center[0] = cov_x
+        self.env.obs[0].center[0] = (cov_x + final_x) / 2
+        self.update_markers()
 
     def run(self):
         rate = rospy.Rate(100)
         while not rospy.is_shutdown():
+            self.update_env()
             for m in self.marker_array.markers:
                 m.header.stamp = rospy.Time.now()
             self.pub.publish(self.marker_array)
@@ -157,11 +164,19 @@ if __name__ == "__main__":
         #             "initial": Box([-1., -1.],[1., 1.]),
         #             "final": Circle([7., 7.], 1.0)
         #        }
-       params = { "covers": [Circle([8., 3.0], 2.0)],
-               "obstacles": [Circle([4.5, 6.], 1.5)],
-               "initial": Box([0., 0.],[3., 3.]),
-               "final": Circle([1., 9.], 1.0)
-                }     
+        # params = { "covers": [Circle([8., 3.0], 2.0)],
+        #        "obstacles": [Circle([4.5, 6.], 1.5)],
+        #        "initial": Box([0., 0.],[3., 3.]),
+        #        "final": Circle([1., 9.], 1.0)
+        #         }     
+        cover_x = rospy.get_param("cov_x", 5)
+        final_x = 5.0
+        obs_x = (cover_x + final_x) / 2
+        params = { "covers": [Circle([cover_x, 3.5], 2.0)],
+           "obstacles": [Circle([obs_x, 9.], 1.5)],
+           "initial": Box([2, -4.],[8, -2]),
+           "final": Circle([final_x, 13], 1.0)
+        }   
     env = Environment(params)
 
 

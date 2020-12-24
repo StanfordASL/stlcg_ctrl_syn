@@ -32,27 +32,43 @@ class XboxTeleopSim:
             self.control.header.stamp = rospy.Time.now()
             # self.control.data.data = [msg.axes[0], msg.axes[1]]
             self.control.data.data = [msg.axes[2], msg.axes[5], msg.axes[0]]
+
         # press the start button to put the robot back to the start region
         if msg.buttons[7] == 1:
             rospy.loginfo("Reset sim")
             self.reset_flag = True
-            self.robot_state = PoseTwistStamped(pose=Pose(position=self.initial_state_offset))
-            self.robot_state.pose.orientation.w = 1.0
+            if self.robot_state is None:
+                self.robot_state = PoseTwistStamped(pose=Pose(position=self.initial_state_offset))
+                self.robot_state.pose.orientation.w = 1.0
             rospy.loginfo("resetting sim mode")
 
         # if the start button has been pressed, we are in the adjusting the robot's initial state 
         if self.reset_flag:
             self.reset_flag_pub.publish(Bool(True))
-            self.robot_state.pose.position.x += self.dx * (-(msg.buttons[2] == 1) + (msg.buttons[1] == 1))
-            self.robot_state.pose.position.y += self.dx * (-(msg.buttons[0] == 1) + (msg.buttons[3] == 1))
-            quat = self.robot_state.pose.orientation
-            euler = list(tf.transformations.euler_from_quaternion([quat.x, quat.y, quat.z, quat.w]))
-            euler[2] += self.dx * ((msg.buttons[4] == 1) - (msg.buttons[5] == 1))
-            self.robot_state.pose.orientation = Quaternion(*tf.transformations.quaternion_from_euler(*euler))
-            # changing forward velocity (twist.linear.x)
-            self.robot_state.twist.linear.x += self.dx * ((msg.axes[4] > 0) - (msg.axes[4] < 0))
-            self.robot_state.header.stamp = rospy.Time.now()
-            self.init_state_pub.publish(self.robot_state)
+
+            if msg.axes[2] == -1:
+                upper = np.array(rospy.get_param("upper", [2, -4, np.pi/4, 0]))
+                lower = np.array(rospy.get_param("lower", [8, -2, 3*np.pi/4, 2]))
+                initial_rand = np.random.rand(*upper.shape) * (upper - lower) + lower
+                self.robot_state.pose.position.x = initial_rand[0]
+                self.robot_state.pose.position.y = initial_rand[1]
+                euler = [0, 0, initial_rand[2]]
+                self.robot_state.pose.orientation = Quaternion(*tf.transformations.quaternion_from_euler(*euler))
+                # changing forward velocity (twist.linear.x)
+                self.robot_state.twist.linear.x = initial_rand[3]
+                self.robot_state.header.stamp = rospy.Time.now()
+                self.init_state_pub.publish(self.robot_state)
+            else:
+                self.robot_state.pose.position.x += self.dx * (-(msg.buttons[2] == 1) + (msg.buttons[1] == 1))
+                self.robot_state.pose.position.y += self.dx * (-(msg.buttons[0] == 1) + (msg.buttons[3] == 1))
+                quat = self.robot_state.pose.orientation
+                euler = list(tf.transformations.euler_from_quaternion([quat.x, quat.y, quat.z, quat.w]))
+                euler[2] += self.dx * ((msg.buttons[4] == 1) - (msg.buttons[5] == 1))
+                self.robot_state.pose.orientation = Quaternion(*tf.transformations.quaternion_from_euler(*euler))
+                # changing forward velocity (twist.linear.x)
+                self.robot_state.twist.linear.x += self.dx * ((msg.axes[4] > 0) - (msg.axes[4] < 0))
+                self.robot_state.header.stamp = rospy.Time.now()
+                self.init_state_pub.publish(self.robot_state)
 
 
         if msg.buttons[6] == 1:
