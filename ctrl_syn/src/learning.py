@@ -60,7 +60,7 @@ bicycle_params = {"lr" : 0.7, "lf" : 0.5, "V_min" : 0.0, "V_max" : 5.0, "a_min" 
 
 class KinematicBicycle(torch.nn.Module):
 
-    def __init__(self, dt, params={"lr" : 0.7, "lf" : 0.5, "V_min" : 0.0, "V_max" : 5.0, "a_min" : -3, "a_max" : 3, "delta_min" : -0.344, "delta_max" : 0.344}):
+    def __init__(self, dt, params={"lr" : 0.7, "lf" : 0.5, "V_min" : 0.0, "V_max" : 5.0, "a_min" : -3, "a_max" : 3, "delta_min" : -0.344, "delta_max" : 0.344, "disturbance_scale" : [0.0, 0.0]}):
         super(KinematicBicycle, self).__init__()
         self.dt = dt
         self.lr = params["lr"]
@@ -73,6 +73,7 @@ class KinematicBicycle(torch.nn.Module):
         self.delta_max = params["delta_max"]
         self.state_dim = 4
         self.ctrl_dim = 2
+        self.disturbance_dist = torch.distributions.Normal(torch.tensor([0.0, 0.0]), torch.tensor(params["disturbance_scale"]))
 
     def forward(self, xcurr, ucurr, tol=1E-3):
         lr = self.lr
@@ -82,11 +83,12 @@ class KinematicBicycle(torch.nn.Module):
         V_min = self.V_min
         V_max = self.V_max
         dt = self.dt
-
+        dcurr = self.disturbance_dist.sample(xcurr.shape[:-1])
+        da, ddelta = dcurr.split(1, dim=-1)
         x, y, psi, V = xcurr.split(1, dim=-1)
         a, delta = ucurr.split(1, dim=-1)
-        a = a.clamp(self.a_min, self.a_max)
-        beta = torch.atan(lr / (lr + lf) * torch.tan(delta.clamp(delta_min, delta_max)))
+        a = (a + da).clamp(self.a_min, self.a_max)
+        beta = torch.atan(lr / (lr + lf) * torch.tan((delta + ddelta).clamp(delta_min, delta_max)))
 
         int_V =  torch.where(a == 0,
                              V * dt,
@@ -225,7 +227,7 @@ class STLPolicy(torch.nn.Module):
         delta = (delta_max - delta_min) / 2 * u_[:,:,1:] + self.delta_lim.mean(-1, keepdims=True)
         u = torch.cat([a, delta], dim=-1)
         # propagate dynamics
-        x_next = self.standardize_x(self.dynamics(self.unstandardize_x(x0), self.unstandardize_u(u)))    # [1, bs, state_dim]
+        x_next = self.standardize_x(self.dynamics(self.unstandardize_x(x0), self.unstandardize_u(u)), dcurr)    # [1, bs, state_dim]
         # append outputs to initial state
         # x_pred = self.join_partial_future_signal(x0[:,:1,:], x_next[:,:-1,:])
         return o, u, x_next
