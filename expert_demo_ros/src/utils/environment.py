@@ -17,7 +17,7 @@ class Environment:
             fig = None
 
         _, ax = self.initial.draw2D(dims, ax=ax, **kwargs["initial"])
-        self.final.draw2D(dims, ax=ax, **kwargs["final"])
+        _, ax = self.final.draw2D(dims, ax=ax, **kwargs["final"])
         for covs in self.covers:
             _, ax = covs.draw2D(dims, ax=ax, **kwargs["covers"])
         for obs in self.obs:
@@ -79,7 +79,61 @@ class Circle:
             ax.fill(x, y, **kwargs)
         
         return fig, ax
-            
+
+
+def generate_random_env():
+    cover_x = np.random.rand() * 10
+    final_x = 5.0
+    obs_x = (cover_x + final_x) / 2
+    params = { "covers": [Circle([cover_x, 3.5], 2.0)],
+               "obstacles": [Circle([obs_x, 9.], 1.5)],
+               "initial": Box([2, -4.],[8, -2]),
+               "final": Circle([final_x, 13], 1.0)
+            }   
+    return Environment(params)
+
+
+def get_env_image(params, save_path, xlim=[-5,15], ylim=[-5,15]):
+
+    env = Environment(params)
+    plt_params = {"color": "black", "fill": True}
+    
+    fig, ax = plt.subplots(figsize=(15,15))
+    _, ax = env.initial.draw2D(ax=ax, **plt_params)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.axis('off')
+    fig.savefig(save_path + "/init", bbox_inches='tight')
+    plt.close(fig)
+
+
+    fig, ax = plt.subplots(figsize=(15,15))
+    _, ax = env.final.draw2D( ax=ax, **plt_params)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.axis('off')
+    fig.savefig(save_path + "/final", bbox_inches='tight')
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(15,15))
+    for covs in env.covers:
+        _, ax = covs.draw2D( ax=ax, **plt_params)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.axis('off')
+    fig.savefig(save_path + "/covers", bbox_inches='tight')
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(15,15))
+    for obs in env.obs:
+        _, ax = obs.draw2D( ax=ax, **plt_params)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.axis('off')
+    fig.savefig(save_path + "/obs", bbox_inches='tight')
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     params = {  "covers": [Box([0., 0.6],[0.3, 0.8]), Box([0.6, 0.2],[1.0, 0.4])],
                 "obstacles": [Circle([0.7, 0.7], 0.15)],
