@@ -19,6 +19,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from environment import *
 import IPython
+import glob
 
 
 
@@ -42,6 +43,33 @@ def prepare_data(npy_file, batch_dim=0):
     u = torch.tensor(data[:, 4:6]).float().unsqueeze(batch_dim).requires_grad_(False)
     return x, u, [μ, σ]
 
+
+def prepare_data_img(filedir, batch_dim=0, height=480, width=480):
+    data_tls = [np.load(fi).shape[0] for fi in sorted(glob.glob(filedir+'*'))]
+    max_tl = max(data_tls)
+    n_data = len(data_tls)
+    data = torch.zeros([n_data, max_tl, 6]).requires_grad_(False)
+    data_list = []
+    imgs = torch.zeros([n_data, 4, height, width]).requires_grad_(False)
+    tls = torch.zeros([n_data]).requires_grad_(False)
+
+
+    for (j,fi) in enumerate(sorted(glob.glob(filedir+'*'))):
+        fi_split = fi.split('_')
+        i = fi_split[2]
+        imgs[j,:,:,:] = convert_env_img_to_tensor("figs/environments/%.1f"%float(i))
+        data_j = torch.tensor(np.load(fi)[:,1:]).float()
+        data_list.append(data_j)
+        traj_length = data_j.shape[0]
+        data[j,:traj_length, :] = data_j
+
+        tls[j] = traj_length
+
+    μ = torch.cat(data_list, dim=0).mean(0).unsqueeze(0).unsqueeze(0)
+    σ = torch.cat(data_list, dim=0).std(0).unsqueeze(0).unsqueeze(0)
+
+    return data[:,:,:4], data[:,:,4:6], tls, imgs, [μ, σ]
+
 def convert_env_img_to_tensor(img_path, grey=torchvision.transforms.Grayscale(), resize=torchvision.transforms.Resize([480, 480])):
     image_tensor = torch.stack([TF.to_tensor(resize(grey(Image.open(img_path + '/init.png')))),
                          TF.to_tensor(resize(grey(Image.open(img_path + '/final.png')))),
@@ -49,6 +77,23 @@ def convert_env_img_to_tensor(img_path, grey=torchvision.transforms.Grayscale(),
                          TF.to_tensor(resize(grey(Image.open(img_path + '/obs.png'))))], dim=1)
 
     return image_tensor
+
+# class ExpertTrajImageDataset(torch.utils.data.Dataset):
+
+#     def __init__(self, filedir, batch_dim=0, height=480, width=480):
+#         self.data, self.tls, self.imgs = prepare_data_img(filedir)
+
+
+#     def __len__(self):
+#         return self.data.shape[batch_dim]
+
+#     def __getitem__(self, idx):
+#         if torch.is_tensor(idx):
+#             idx = idx.tolist()
+            
+        
+#         return {"x": self.data[idx,:,:4], "u": self.data[idx,:,4:6], "tl": self.tls[idx], "img": self.imgs[idx,:,:,:]}
+
 
 def standardize_data(x, mu, sigma):
     return (x - mu)/sigma
@@ -138,8 +183,6 @@ class InitialConditionDataset(torch.utils.data.Dataset):
         return self.ic[idx]
 
 
-
-
 def flip_tuple_input(x, time_dim=1):
     if not isinstance(x, tuple):
         return x.flip(time_dim)
@@ -197,7 +240,8 @@ class STLPolicy(torch.nn.Module):
         return u * sigma + mu
 
     def initial_rnn_state(self, x0):
-        # x0 is [bs, state_dim]
+        # note the dimensions!
+        # x0 is [1, bs, state_dim]
         return self.initialize_rnn_h(x0), self.initialize_rnn_c(x0)
 
     def forward(self, x0, h0=None):
@@ -205,7 +249,7 @@ class STLPolicy(torch.nn.Module):
         Passes x through the LSTM, computes control u, and propagate through dynamics. Very vanilla propagation. Feeds in x into LSTM.
 
         Inputs:
-            x is [bs, time_dim, state_dim]
+            x0 is [bs, time_dim, state_dim]
 
         Outputs:
             o is [bs, time_dim, hidden_dim] --- outputs of the LSTM cell
@@ -215,7 +259,7 @@ class STLPolicy(torch.nn.Module):
         if h0 is None:
             h0 = self.initial_rnn_state(x0[:,:1,:].permute([1,0,2]))
 
-        o, _ = self.lstm(x0, h0)    # [bs, time_dim, hidden_dim] , bs = 1 for a single expert trajectory.
+        o, h0 = self.lstm(x0, h0)    # [bs, time_dim, hidden_dim] , bs = 1 for a single expert trajectory.
 
         # [bs, time_dim, ctrl_dim]  projecting between u_min and u_max (standardize) since proj is between -1 and 1 due to tanh
         u_ = self.proj(o)    # [bs, 1, ctrl_dim]   [a, delta]
@@ -227,10 +271,10 @@ class STLPolicy(torch.nn.Module):
         delta = (delta_max - delta_min) / 2 * u_[:,:,1:] + self.delta_lim.mean(-1, keepdims=True)
         u = torch.cat([a, delta], dim=-1)
         # propagate dynamics
-        x_next = self.standardize_x(self.dynamics(self.unstandardize_x(x0), self.unstandardize_u(u)), dcurr)    # [1, bs, state_dim]
+        x_next = self.standardize_x(self.dynamics(self.unstandardize_x(x0), self.unstandardize_u(u)))    # [1, bs, state_dim]
         # append outputs to initial state
         # x_pred = self.join_partial_future_signal(x0[:,:1,:], x_next[:,:-1,:])
-        return o, u, x_next
+        return o, u, x_next, h0
 
 
 
@@ -304,8 +348,9 @@ class STLPolicy(torch.nn.Module):
             us = []
             xs.append(x_true[:,:1,:])
             x_input = xs[-1]
+            h0 = None
             for t in range(x_true.shape[1]-1):
-                o, u, x_next = self.forward(x_input)
+                o, u, x_next, h0 = self.forward(x_input, imgs, h0=h0)
                 xs.append(x_next)
                 us.append(u)
                 if prob[t]:
@@ -342,11 +387,16 @@ class STLPolicy(torch.nn.Module):
         # minimize mean robustness
         return self.STL_robustness(x, formula, formula_input, **kwargs).mean()
 
+def get_tl_elements(data, tls):
+    arange = torch.ones_like(data) * torch.arange(tls.max()).unsqueeze(0).unsqueeze(-1)
+    mask = (arange == (tls - 1).unsqueeze(-1).unsqueeze(-1))
+    return torch.masked_select(data, mask).view(data.shape[0], 1, data.shape[2])
+
 
 class STLCNNPolicy(torch.nn.Module):
 
     def __init__(self, dynamics, hidden_dim, stats, env, dropout=0., num_layers=1):
-        super(STLPolicy, self).__init__()
+        super(STLCNNPolicy, self).__init__()
 
         self.dynamics = dynamics
         self.stats = stats
@@ -363,7 +413,7 @@ class STLCNNPolicy(torch.nn.Module):
                                        torch.nn.BatchNorm2d(4),
                                        torch.nn.ReLU(),
                                        torch.nn.MaxPool2d(kernel_size=4),
-                                       torch.nn.Conv2d(in_channels=4, out_channels=4, kernel_size=8, padding=4, stride=4))
+                                       torch.nn.Conv2d(in_channels=4, out_channels=1, kernel_size=8, padding=4, stride=4))
 
 
         self.lstm = torch.nn.LSTM(self.state_dim, hidden_dim, num_layers, dropout=dropout, batch_first=True)
@@ -406,11 +456,13 @@ class STLCNNPolicy(torch.nn.Module):
         sigma = self.stats[1][:,:,self.state_dim:]
         return u * sigma + mu
 
-    def initial_rnn_state(self, x0):
+    def initial_rnn_state(self, imgs):
         # x0 is [bs, state_dim]
-        return self.initialize_rnn_h(x0), self.initialize_rnn_c(x0)
+        y = self.cnn(imgs)
+        y0 = y.view(*y.shape[:2], -1).permute([1,0,2])
+        return self.initialize_rnn_h(y0), self.initialize_rnn_c(y0)
 
-    def forward(self, x0, h0=None):
+    def forward(self, x0, imgs, h0=None):
         '''
         Passes x through the LSTM, computes control u, and propagate through dynamics. Very vanilla propagation. Feeds in x into LSTM.
 
@@ -423,9 +475,9 @@ class STLCNNPolicy(torch.nn.Module):
             x_next is [bs, time_dim, state_dim] --- propagate dynamics from previous state and computed controls
         '''
         if h0 is None:
-            h0 = self.initial_rnn_state(x0[:,:1,:].permute([1,0,2]))
+            h0 = self.initial_rnn_state(imgs)
 
-        o, _ = self.lstm(x0, h0)    # [bs, time_dim, hidden_dim] , bs = 1 for a single expert trajectory.
+        o, h0 = self.lstm(x0, h0)    # [bs, time_dim, hidden_dim] , bs = 1 for a single expert trajectory.
 
         # [bs, time_dim, ctrl_dim]  projecting between u_min and u_max (standardize) since proj is between -1 and 1 due to tanh
         u_ = self.proj(o)    # [bs, 1, ctrl_dim]   [a, delta]
@@ -440,11 +492,11 @@ class STLCNNPolicy(torch.nn.Module):
         x_next = self.standardize_x(self.dynamics(self.unstandardize_x(x0), self.unstandardize_u(u)))    # [1, bs, state_dim]
         # append outputs to initial state
         # x_pred = self.join_partial_future_signal(x0[:,:1,:], x_next[:,:-1,:])
-        return o, u, x_next
+        return o, u, x_next, h0
 
 
 
-    def propagate_n(self, n, x_partial, time_dim=1):
+    def propagate_n(self, n, x_partial, imgs, time_dim=1):
         '''
         Given x_partial, predict the future controls/states for the next n time steps
 
@@ -458,7 +510,7 @@ class STLCNNPolicy(torch.nn.Module):
             u_next is [bs, n, ctrl_dim] --- sequence of controls over the next n time steps
         '''
 
-        h0 = self.initial_rnn_state(x_partial[:,:1,:].permute([1,0,2]))
+        h0 = self.initial_rnn_state(imgs)
 
         x_future = []
         u_future = []
@@ -486,7 +538,7 @@ class STLCNNPolicy(torch.nn.Module):
         return x_next, u_next
 
 
-    def reconstruction_loss(self, x_true, u_true, teacher_training=0.0, time_dim=1):
+    def reconstruction_loss(self, x_true, u_true, imgs, tls, teacher_training=0.0, time_dim=1):
         '''
         Given an input trajectory x_traj, compute the reconstruction error for state and control.
 
@@ -505,7 +557,7 @@ class STLCNNPolicy(torch.nn.Module):
         '''
         # no teacher training, relying on ground truth
         if teacher_training == 0.0:
-            o, u_pred, x_pred = self.forward(x_true)
+            o, u_pred, x_pred, h0 = self.forward(x_true, imgs)
             x_pred = self.join_partial_future_signal(x_true[:,:1,:], x_pred[:,:-1,:])
             return self.L2loss(x_pred, x_true), self.L2loss(u_pred, u_true), x_pred, u_pred
         else:
@@ -514,8 +566,9 @@ class STLCNNPolicy(torch.nn.Module):
             us = []
             xs.append(x_true[:,:1,:])
             x_input = xs[-1]
+            h0 = None
             for t in range(x_true.shape[1]-1):
-                o, u, x_next = self.forward(x_input)
+                o, u, x_next, h0 = self.forward(x_input, imgs, h0=h0)
                 xs.append(x_next)
                 us.append(u)
                 if prob[t]:
@@ -523,12 +576,15 @@ class STLCNNPolicy(torch.nn.Module):
                 else:
                     x_input = x_true[:,t+1:t+2,:]
             xx = torch.cat(xs, time_dim)
-            o, u, _ = self.forward(x_input)
+            o, u, _, _ = self.forward(x_input, imgs, h0=h0)
             us.append(u)
             uu = torch.cat(us, time_dim)
-            # ignoring the first time step since there will be no error
-            recon_state_loss = self.L2loss(xx[:,1:,:], x_true[:,1:,:])
-            recon_ctrl_loss = self.L2loss(uu, u_true)
+            
+            d = (xx - x_true).pow(2).cumsum(1).mean(-1, keepdims=True)
+            recon_state_loss = get_tl_elements(d, tls).mean()
+            
+            d = (uu - u_true).pow(2).cumsum(1).mean(-1, keepdims=True)
+            recon_ctrl_loss = get_tl_elements(d, tls).mean()
             return recon_state_loss, recon_ctrl_loss, xx, uu
 
 
@@ -538,7 +594,7 @@ class STLCNNPolicy(torch.nn.Module):
 
     def STL_robustness(self, x, formula, formula_input, **kwargs):
         signal = self.unstandardize_x(x)    # [bs, time_dim, state_dim]
-        return formula.robustness(formula_input(signal), **kwargs)
+        return formula.robustness(formula_input(signal, self.env.covers[0], self.env.obs[0]), **kwargs)
 
     def STL_loss(self, x, formula, formula_input, **kwargs):
         # penalize negative robustness values only

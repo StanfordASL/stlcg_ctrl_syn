@@ -26,12 +26,12 @@ def always_outside_circle(circle, name, interval=None):
 def circle_input(signal, cover, device='cpu', backwards=False, time_dim=1):
     if not backwards:
         signal = signal.flip(time_dim)
-    return (signal[:,:,:2].to(device) - torch.tensor(cover.center).to(device)).pow(2).sum(-1, keepdim=True)
+    return (signal[:,:,:2].to(device) - torch.tensor(cover.center).to(device)).pow(2).sum(-1, keepdim=True).float()
 
 def speed_input(signal, device='cpu', backwards=False):
     if not backwards:
         signal = signal.flip(1)
-    return signal[:,:,3:4].to(device)
+    return signal[:,:,3:4].to(device).float()
 
 def get_formula_input(signal, cover, obs, goal, device, backwards=False):
     # (coverage until goal) & avoid obs
