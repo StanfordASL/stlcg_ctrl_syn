@@ -368,8 +368,12 @@ def train_cnn(model, train_traj, eval_traj, imgs, tls, formula, formula_input_fu
     # switch everything to the specified device
     x_train, u_train = train_traj[0].to(device), train_traj[1].to(device)
     x_eval, u_eval = eval_traj[0].to(device), eval_traj[1].to(device)
-    imgs = imgs.to(device)
-    tls = tls.to(device)
+    imgs_train, imgs_eval = imgs
+    imgs_train = imgs_train.to(device)
+    imgs_eval = imgs_eval.to(device)
+    tls_train, tls_eval = tls
+    tls_train = tls_train.to(device)
+    tls_eval = tls_eval.to(device)
     model = model.to(device)
     model.switch_device(device)
 
@@ -416,7 +420,7 @@ def train_cnn(model, train_traj, eval_traj, imgs, tls, formula, formula_input_fu
                 stl_scale_value = hps.stl_scale(hps_idx)
 
                 # reconstruct the expert model
-                loss_state, loss_ctrl, x_traj_pred, u_traj_pred = model.reconstruction_loss(x_train, u_train, imgs, tls, teacher_training=teacher_training_value)
+                loss_state, loss_ctrl, x_traj_pred, u_traj_pred = model.reconstruction_loss(x_train, u_train, imgs_train, tls_train, teacher_training=teacher_training_value)
                 loss_recon = loss_state + hps.weight_ctrl * loss_ctrl
 
                 # with new ICs, propagate the trajectories
@@ -502,7 +506,7 @@ def train_cnn(model, train_traj, eval_traj, imgs, tls, formula, formula_input_fu
                     # trajectories from propagating initial states
                     traj_np = model.unstandardize_x(complete_traj).cpu().detach().numpy()
                     # trajectory from propagating initial state of expert trajectory
-                    x_future, u_future = model.propagate_n(T, x_train[:,:1,:], imgs)
+                    x_future, u_future = model.propagate_n(T, x_train[:,:1,:], imgs_train)
                     x_traj_prop = model.join_partial_future_signal(x_train[:,:1,:], x_future)
                     x_traj_prop = model.unstandardize_x(x_traj_prop).squeeze().detach().cpu().numpy()
                     # trajectory from teacher training, and used for reconstruction loss (what the training sees)
@@ -570,12 +574,21 @@ def train_cnn(model, train_traj, eval_traj, imgs, tls, formula, formula_input_fu
 
 
                 # reconstruct the expert model
-                loss_state, loss_ctrl, x_traj_pred, u_traj_pred = model.reconstruction_loss(x_eval, u_eval, teacher_training=1.0)
+                loss_state, loss_ctrl, x_traj_pred, u_traj_pred = model.reconstruction_loss(x_eval, u_eval, imgs_eval, tls_eval, teacher_training=1.0)
                 loss_recon = loss_state + hps.weight_ctrl * loss_ctrl
 
                 # with new ICs, propagate the trajectories
-                x_future, u_future = model.propagate_n(T, ic)
-                complete_traj = model.join_partial_future_signal(ic, x_future)      # [time, bs, x_dim]
+                bs = ic.shape[0]
+                centers = np.round(1+np.random.rand(bs) * 9, 1)    # between 1-10, and one decimal place
+                # GROSS -- hard coding some parameters here :/ 
+                final_x = model.env.final.center[0]
+                obs_x = (centers + final_x) / 2
+                model.env.covers[0].center = np.expand_dims(np.stack([center_batch, 3.5 * np.ones_like(center_batch)], axis=1), 1)
+                model.env.obs[0].center = np.expand_dims(np.stack([obs_x, 9. * np.ones_like(obs_x)], axis=1), 1)
+                ic_imgs = torch.cat([convert_env_img_to_tensor("../figs/environments/%.1f"%cb) for cb in centers], dim=0)
+
+                x_future, u_future = model.propagate_n(T, ic, ic_imgs)
+                complete_traj = model.join_partial_future_signal(ic, x_future)      # [bs, time_dim, x_dim]
 
                 # stl loss
                 loss_stl = model.STL_loss(complete_traj, formula, formula_input_func, scale=-1)

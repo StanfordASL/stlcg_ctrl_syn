@@ -200,35 +200,28 @@ hps = hyperparameters(weight_decay=0.05,
 
 
 # original data
-x_train_, u_train_, stats = prepare_data("../expert/" + args.type + "/train.npy")
-x_eval_, u_eval_, _ = prepare_data("../expert/" + args.type + "/eval.npy")
+
+x_train_, u_train_, tls_train, imgs_train, stats = prepare_data_img("../expert/coverage_cnn/train")
+x_eval_, u_eval_, tls_eval, imgs_eval, stats = prepare_data_img("../expert/coverage_cnn/eval")
 
 #  setting up environment
-if args.type == "coverage":
-    params = { "covers": [Circle([8., 3.0], 2.0)],
-               "obstacles": [Circle([4.5, 6.], 1.5)],
-               "initial": Box([0., 0.],[3., 3.]),
-               "final": Circle([1., 9.], 1.0)
-             } 
-elif args.type == "goal":
-    params = {  "covers": [],
-                "obstacles": [Circle([7., 7.], 2.0)],
-                "initial": Box([-1., -1.],[1., 1.]),
-                "final": Box([9.0, 9.0],[11.0, 11.0])
-                }
+# will be overridden later
+params = 
+center_batch = np.round(1+np.random.rand(16) * 9, 1)
+final_x = 5.0
+obs_x = (center_batch + final_x) / 2
 
-elif args.type == "test":
-    params = {  "covers": [],
-                "obstacles": [],
-                "initial": Box([-1., -1.],[1., 1.]),
-                "final": Box([4.0, 4.0],[6.0, 6.0])
-           } 
-             
+params = { "covers": [Circle(np.expand_dims(np.stack([center_batch, 3.5 * np.ones_like(center_batch)], axis=1), 1), 2.0)],
+   "obstacles": [Circle(np.expand_dims(np.stack([obs_x, 9. * np.ones_like(obs_x)], axis=1), 1), 1.5)],
+   "initial": Box([2, -4.],[8, -2]),
+   "final": Circle([final_x, 13], 1.0)
+} 
 env = Environment(params)
+             
 
 # initial conditions set
-lower = torch.tensor([env.initial.lower[0], env.initial.lower[1], -np.pi/4, 0])
-upper = torch.tensor([env.initial.upper[0], env.initial.upper[1], np.pi/4, 2])
+lower = torch.tensor([env.initial.lower[0], env.initial.lower[1], np.pi/4, 0])
+upper = torch.tensor([env.initial.upper[0], env.initial.upper[1], 3*np.pi/4, 2])
 
 ic_train_ = initial_conditions(args.trainset_size, lower, upper)
 ic_eval_ = initial_conditions(args.evalset_size, lower, upper)
@@ -260,11 +253,10 @@ stl_graph = stlviz.make_stl_graph(formula)
 stlviz.save_graph(stl_graph, fig_dir + "/stl")
 
 dynamics = KinematicBicycle(dt)
-model = STLPolicy(dynamics, 
+model = STLCNNPolicy(dynamics, 
                   args.lstm_dim, 
                   stats, 
-                  env, 
-                  args.dropout).to(device)
+                  env).to(device)
 
 
 if args.mode == "test":
