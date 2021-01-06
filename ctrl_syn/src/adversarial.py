@@ -1,4 +1,6 @@
 import sys
+sys.path.append('src')
+import os
 import torch
 import numpy as np
 from torch import nn, optim
@@ -8,12 +10,14 @@ from torch.utils.data import Dataset, DataLoader
 from learning import *
 from utils import *
 
+pardir = os.path.dirname(os.path.dirname(__file__))
+
 
 draw_params = {"initial": {"color": "lightskyblue", "fill": True, "alpha": 0.5}, "final": {"color": "coral", "fill": True, "alpha": 0.5}, "covers": {"color": "black", "fill": False}, "obs": {"color": "red", "fill": True, "alpha": 0.5} }
 
 
-
-def adversarial(model, T, formula, formula_input_func, device, tqdm, writer, hps, save_model_path, number, lower, upper, iter_max=50, adv_n_samples=128):
+# adversarial using gradient descent
+def adversarial_gd(model, T, formula, formula_input_func, device, tqdm, writer, hps, save_model_path, number, lower, upper, iter_max=50, adv_n_samples=128):
     log_dir = save_model_path.replace("models", "logs", 1)
     fig_dir = save_model_path.replace("models", "figs", 1)
 
@@ -25,12 +29,9 @@ def adversarial(model, T, formula, formula_input_func, device, tqdm, writer, hps
     model.train()
     model = model.to(device)
     model.switch_device(device)
-    mu_x, sigma_x = model.stats[0][:,:,:4], model.stats[1][:,:,:4]
-    mu_u, sigma_u = model.stats[0][:,:,4:], model.stats[1][:,:,4:]
 
     env = model.env
     ic_var_ = initial_conditions(adv_n_samples, lower, upper).to(device)
-
     ic_var =  model.standardize_x(ic_var_).to(device).requires_grad_(True)                          # [batch, time, x_dim]
 
     x_min = model.standardize_x(lower.to(device))
@@ -144,4 +145,129 @@ def adversarial(model, T, formula, formula_input_func, device, tqdm, writer, hps
     adv_ic = ic_var[violating_idx,:,:] # [batch, 1, x_dim]
     ret_adv_ic = model.unstandardize_x(adv_ic).to("cpu").detach()
     return ret_adv_ic
+
+
+# rejection-acceptance sampling
+def adversarial_rejacc(model, T, formula, formula_input_func, device, hps, save_model_path, number, lower, upper, adv_n_samples=512):
+    log_dir = save_model_path.replace("models", "logs", 1)
+    fig_dir = save_model_path.replace("models", "figs", 1)
+
+    print("\nAdversarial training on model:", save_model_path, "\n")
+    checkpoint = torch.load(save_model_path + '/model')
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.train()
+    model = model.to(device)
+    model.switch_device(device)
+
+    n = 10**4
+    x0_ = initial_conditions(n, lower, upper).float()
+    x0 = model.standardize_x(x0_)
+    x_future, u_future = model.propagate_n(T, x0)
+    complete_traj = model.join_partial_future_signal(x0, x_future)
+
+    rho = model.STL_robustness(complete_traj, formula, formula_input_func, scale=-1).squeeze()
+
+    violating_idx = rho <= 0
+    satisfying_idx = rho > 0
+
+    traj_np = model.unstandardize_x(complete_traj).cpu().detach().numpy()
+
+
+    fig1, ax = plt.subplots(figsize=(10,10))
+    _, ax = model.env.draw2D(ax=ax, kwargs=draw_params)
+    ax.axis("equal")
+    # plotting the sampled initial state trajectories
+    ax.plot(traj_np[satisfying_idx,:,0].T, traj_np[satisfying_idx,:,1].T, alpha=0.5, c='RoyalBlue')
+    ax.scatter(traj_np[satisfying_idx,:,0].T, traj_np[satisfying_idx,:,1].T, alpha=0.5, c='RoyalBlue')
+    ax.plot(traj_np[violating_idx,:,0].T, traj_np[violating_idx,:,1].T, alpha=0.5, c='IndianRed')
+    ax.scatter(traj_np[violating_idx,:,0].T, traj_np[violating_idx,:,1].T, alpha=0.5, c='IndianRed', marker="x")
+
+    ax.set_xlim([-5, 15])
+    ax.set_ylim([-5, 15])
+
+    fig1.savefig(fig_dir + '/adversarial/traj_number={:02d}.png'.format(number))
+
+    writer.add_figure('adversarial/trajectory', fig1, number)
+    plt.close(fig1)
+
+
+
+
+
+# rejection-acceptance sampling
+def adversarial_rejacc_cnn(model, T, formula, formula_input_func, device, hps, save_model_path, number, lower, upper, adv_n_samples=512):
+    log_dir = save_model_path.replace("models", "logs", 1)
+    fig_dir = save_model_path.replace("models", "figs", 1)
+
+    print("\nAdversarial training on model:", save_model_path, "\n")
+    checkpoint = torch.load(save_model_path + '/model')
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.train()
+    model = model.to(device)
+    model.switch_device(device)
+    env_tmp = copy.deepcopy(model.env)
+
+    # rejection-acceptance sampling
+
+    x0_ = initial_conditions(adv_n_samples, lower, upper).float()
+    x0 = model.standardize_x(x0_)
+
+    # with ICs, propagate the trajectories
+    xdim = x0.shape[-1]
+    img_bs = hps.img_bs
+    centers_ic = np.round(1+np.random.rand(img_bs) * 9, 1)    # between 1-10, and one decimal place
+    # GROSS -- hard coding some parameters here :/ 
+    final_x = model.env.final.center[0]
+    obs_x = (centers_ic + final_x) / 2
+    model.env.covers[0].center = torch.tensor(np.stack([centers_ic, 3.5 * np.ones_like(centers_ic)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, adv_n_samples, 1, 1]).view([-1, 1, 2])
+    model.env.obs[0].center = torch.tensor(np.stack([obs_x, 9. * np.ones_like(obs_x)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, adv_n_samples, 1, 1]).view([-1, 1, 2])
+
+    ic_imgs = torch.cat([convert_env_img_to_tensor(os.path.join(pardir, "figs/environments/%.1f"%cb)) for cb in centers_ic], dim=0).to(device)
+
+    ic_batch = x0[None,...].repeat([img_bs,1,1,1]).view(-1, 1, xdim)
+    img_batch = ic_imgs.unsqueeze(1).repeat([1, adv_n_samples, 1, 1, 1]).view([-1, *ic_imgs.shape[-3:]])
+
+    x_future, u_future = model.propagate_n(T, ic_batch, img_batch)
+    complete_traj = model.join_partial_future_signal(ic_batch, x_future)      # [bs, time_dim, x_dim]
+
+    rho = model.STL_robustness(complete_traj, formula, formula_input_func, scale=-1).squeeze()
+
+
+    violating_idx = (rho <= 0).view(img_bs, adv_n_samples)
+    satisfying_idx = (rho > 0).view(img_bs, adv_n_samples)
+
+    traj_np = model.unstandardize_x(complete_traj).view(img_bs, adv_n_samples, T+1, xdim).cpu().detach()
+
+    # trajectory plot
+    fig1, ax1s = plt.subplots(2, img_bs//2, figsize=(20,10))
+    cover_center_list = model.env.covers[0].center.view(img_bs, adv_n_samples, 1, 2)[:,0]
+    obs_center_list = model.env.obs[0].center.view(img_bs, adv_n_samples, 1, 2)[:,0]
+
+    for i in range(img_bs):
+        env_tmp.covers[0].center = list(cover_center_list[i].squeeze().numpy())
+        env_tmp.obs[0].center = list(obs_center_list[i].squeeze().numpy())
+
+        ax = ax1s[i//(img_bs//2), i % (img_bs//2)]
+        ax.grid(zorder=0)
+        _, ax = env_tmp.draw2D(ax=ax, kwargs=draw_params)
+        ax.axis("equal")
+        ax.set_title("%i: cover_x = %.1f"%(i+1, env_tmp.covers[0].center[0]))
+        ax.plot(traj_np[i,satisfying_idx[i],:,0].T, traj_np[i,satisfying_idx[i],:,1].T, alpha=0.4, c='RoyalBlue', zorder=5)
+        ax.scatter(traj_np[i,satisfying_idx[i],:,0].T, traj_np[i,satisfying_idx[i],:,1].T, alpha=0.4, c='RoyalBlue', zorder=5)
+        ax.plot(traj_np[i,violating_idx[i],:,0].T, traj_np[i,violating_idx[i],:,1].T, alpha=0.4, c='IndianRed', zorder=5)
+        ax.scatter(traj_np[i,violating_idx[i],:,0].T, traj_np[i,violating_idx[i],:,1].T, alpha=0.4, c='IndianRed', zorder=5, marker="x")
+        ax.set_xlim([-5, 15])
+        ax.set_ylim([-5, 15])
+
+
+
+    fig1.savefig(fig_dir + '/adversarial/traj_number={:02d}.png'.format(number))
+
+    # writer.add_figure('adversarial/trajectory', fig1, number)
+    plt.close(fig1)
+
+
+    violating_idx = violating_idx.view(-1)
+
+    return ic_batch[violating_idx], img_batch[violating_idx]
 

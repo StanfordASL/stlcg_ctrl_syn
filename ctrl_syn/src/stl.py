@@ -26,7 +26,11 @@ def always_outside_circle(circle, name, interval=None):
 def circle_input(signal, cover, device='cpu', backwards=False, time_dim=1):
     if not backwards:
         signal = signal.flip(time_dim)
-    return (signal[:,:,:2].to(device) - torch.tensor(cover.center).to(device)).pow(2).sum(-1, keepdim=True).float()
+    if isinstance(cover.center, torch.Tensor):
+        center = cover.center
+    else:
+        center = torch.Tensor(cover.center)
+    return (signal[:,:,:2].to(device) - center.to(device)).pow(2).sum(-1, keepdim=True).float()
 
 def speed_input(signal, device='cpu', backwards=False):
     if not backwards:

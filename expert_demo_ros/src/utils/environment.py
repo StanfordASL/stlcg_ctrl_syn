@@ -1,7 +1,7 @@
 import matplotlib
 import numpy as np
 import matplotlib.pyplot as plt
-
+import copy
 
 class Environment:
     def __init__(self, params):
@@ -24,8 +24,7 @@ class Environment:
             _, ax = obs.draw2D(dims, ax=ax, **kwargs["obs"])
 
         return fig, ax
-            
-        
+
 
 class Box:
     def __init__(self, lower, upper):
@@ -52,8 +51,8 @@ class Box:
             ax.fill(x_corners, y_corners, **kwargs)
 
 
-        return fig, ax
-            
+        return fig, ax       
+             
 class Circle:
     def __init__(self, center, radius):
         self.center = center
