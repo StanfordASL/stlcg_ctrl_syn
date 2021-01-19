@@ -18,7 +18,7 @@ pardir = os.path.dirname(os.path.dirname(__file__))
 draw_params = {"initial": {"color": "lightskyblue", "fill": True, "alpha": 0.5}, "final": {"color": "coral", "fill": True, "alpha": 0.5}, "covers": {"color": "black", "fill": False}, "obs": {"color": "red", "fill": True, "alpha": 0.5} }
 
 
-def train(model, train_traj, eval_traj, formula, formula_input_func, train_loader, eval_loader, device, tqdm, writer, hps, save_model_path, number, iter_max=np.inf, status="new"):
+def train(model, train_traj, eval_traj, formula, formula_input_func, train_loader, eval_loader, device, tqdm, writer, hps, save_model_path, number, iter_max=np.inf, status="new", xlim=[-6, 16], ylim=[-6, 16]):
     '''
     This controls the control logic of the gradient steps
 
@@ -171,15 +171,15 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                     np.save('../nan/' + model_name + '/ic_recon.npy', ic.cpu())
                     nan_flag = True
                 optimizer.zero_grad()
-
-                writer.add_scalar('train/loss/state', loss_state, gradient_step)
-                writer.add_scalar('train/loss/ctrl', loss_ctrl, gradient_step)
-                writer.add_scalar('train/loss/STL', loss_stl, gradient_step)
-                writer.add_scalar('train/loss/STL_true', loss_stl_true, gradient_step)
-                writer.add_scalar('train/loss/total', loss, gradient_step)
-                writer.add_scalar('train/parameters/teacher_training', teacher_training_value, gradient_step)
-                writer.add_scalar('train/parameters/stl_scale', stl_scale_value, gradient_step)
-                writer.add_scalar('train/parameters/weight_stl', weight_stl, gradient_step)
+                if writer is not None:
+                    writer.add_scalar('train/loss/state', loss_state, gradient_step)
+                    writer.add_scalar('train/loss/ctrl', loss_ctrl, gradient_step)
+                    writer.add_scalar('train/loss/STL', loss_stl, gradient_step)
+                    writer.add_scalar('train/loss/STL_true', loss_stl_true, gradient_step)
+                    writer.add_scalar('train/loss/total', loss, gradient_step)
+                    writer.add_scalar('train/parameters/teacher_training', teacher_training_value, gradient_step)
+                    writer.add_scalar('train/parameters/stl_scale', stl_scale_value, gradient_step)
+                    writer.add_scalar('train/parameters/weight_stl', weight_stl, gradient_step)
 
                 # plotting progress
                 if batch_idx % 20 == 0:
@@ -195,7 +195,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                     # trajectory plot
                     fig1, ax = plt.subplots(figsize=(10,10))
                     _, ax = model.env.draw2D(ax=ax, kwargs=draw_params)
-                    ax.axis("equal")
+                    
 
                     # plotting the sampled initial state trajectories
                     ax.plot(traj_np[:,:,0].T, traj_np[:,:,1].T, alpha=0.4, c='RoyalBlue')
@@ -204,16 +204,17 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                     ax.plot(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], linewidth=4, c='k', linestyle='--', zorder=2)
                     ax.scatter(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], s=100, c='k', label="Expert", zorder=3)
                     # plotting propagated expert trajectory
-                    ax.plot(x_traj_prop[:,0], x_traj_prop[:,1], linewidth=3, c="dodgerblue", linestyle='--', label="Reconstruction", zorder=4)
+                    ax.plot(x_traj_prop[:,0], x_traj_prop[:,1], linewidth=3, c="dodgerblue", linestyle='--', label="Reconstruction", zorder=5)
                     ax.scatter(x_traj_prop[:,0], x_traj_prop[:,1], s=100, c="dodgerblue", zorder=5)
                     # plotting predicted expert trajectory during training (with teacher training)
                     ax.plot(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], linewidth=3, c="IndianRed", linestyle='--', label="Expert recon.", zorder=6)
                     ax.scatter(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], s=100, c="IndianRed", zorder=7)
+                    ax.axis("equal")
+                    ax.set_xlim(xlim)
+                    ax.set_ylim(ylim)
 
-                    ax.set_xlim([-5, 15])
-                    ax.set_ylim([-5, 15])
-
-                    writer.add_figure('train/trajectory', fig1, gradient_step)
+                    if writer is not None:
+                        writer.add_figure('train/trajectory', fig1, gradient_step)
 
                     # controls plot
                     fig2, axs = plt.subplots(1,2,figsize=(15,6))
@@ -223,7 +224,9 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                         a.grid()
                         a.set_xlim([0,T])
                         a.set_ylim([-4,4])
-                    writer.add_figure('train/controls', fig2, gradient_step)
+
+                    if writer is not None:
+                        writer.add_figure('train/controls', fig2, gradient_step)
 
 
                 if nan_flag:
@@ -267,10 +270,11 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 # total loss
                 loss = hps.weight_recon * loss_recon + weight_stl * loss_stl
 
-                writer.add_scalar('eval/state', loss_state, eval_iteration)
-                writer.add_scalar('eval/ctrl', loss_ctrl, eval_iteration)
-                writer.add_scalar('eval/STL', loss_stl, eval_iteration)
-                writer.add_scalar('eval/total', loss, eval_iteration)
+                if writer is not None:
+                    writer.add_scalar('eval/state', loss_state, eval_iteration)
+                    writer.add_scalar('eval/ctrl', loss_ctrl, eval_iteration)
+                    writer.add_scalar('eval/STL', loss_stl, eval_iteration)
+                    writer.add_scalar('eval/total', loss, eval_iteration)
 
 
                 traj_np = model.unstandardize_x(complete_traj).cpu().detach().numpy()
@@ -292,16 +296,16 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                 ax.plot(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], linewidth=4, c='k', linestyle='--', zorder=2)
                 ax.scatter(x_train_.squeeze().cpu().numpy()[:,0], x_train_.squeeze().cpu().numpy()[:,1], s=100, c='k', label="Expert", zorder=3)
                 # plotting propagated expert trajectory
-                ax.plot(x_traj_prop[:,0], x_traj_prop[:,1], linewidth=3, c="dodgerblue", linestyle='--', label="Reconstruction", zorder=4)
+                ax.plot(x_traj_prop[:,0], x_traj_prop[:,1], linewidth=3, c="dodgerblue", linestyle='--', label="Reconstruction", zorder=5)
                 ax.scatter(x_traj_prop[:,0], x_traj_prop[:,1], s=100, c="dodgerblue", zorder=5)
                 # plotting predicted expert trajectory during training (with teacher training)
                 ax.plot(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], linewidth=3, c="IndianRed", linestyle='--', label="Expert recon.", zorder=6)
                 ax.scatter(x_traj_pred.cpu().detach().squeeze().numpy()[:,0], x_traj_pred.cpu().detach().squeeze().numpy()[:,1], s=100, c="IndianRed", zorder=7)
 
-                ax.set_xlim([-5, 15])
-                ax.set_ylim([-5, 15])
-
-                writer.add_figure('eval/trajectory', fig1, eval_iteration)
+                ax.set_xlim(xlim)
+                ax.set_ylim(ylim)
+                if writer is not None:
+                    writer.add_figure('eval/trajectory', fig1, eval_iteration)
                 fig1.savefig(fig_dir + '/eval/number={:02d}_iteration={:03d}.png'.format(number, eval_iteration))
 
                 fig2, axs = plt.subplots(1,2,figsize=(15,6))
@@ -311,7 +315,8 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
                     a.grid()
                     a.set_xlim([0,T])
                     a.set_ylim([-4,4])
-                writer.add_figure('eval/controls', fig2, eval_iteration)
+                if writer is not None:
+                    writer.add_figure('eval/controls', fig2, eval_iteration)
 
 
                 eval_iteration += 1
@@ -329,7 +334,7 @@ def train(model, train_traj, eval_traj, formula, formula_input_func, train_loade
 
 
 
-def train_cnn(model, train_traj, eval_traj, imgs, tls, centers, formula, formula_input_func, train_loader, eval_loader, device, tqdm, writer, hps, save_model_path, number, adv_samples=None, iter_max=np.inf, status="new"):
+def train_cnn(model, train_traj, eval_traj, imgs, tls, centers, formula, formula_input_func, train_loader, eval_loader, device, tqdm, writer, hps, save_model_path, number, iter_max=np.inf, status="new", xlim=[-6, 16], ylim=[-6, 16], plot_freq=10):
     '''
     This controls the control logic of the gradient steps
 
@@ -376,6 +381,7 @@ def train_cnn(model, train_traj, eval_traj, imgs, tls, centers, formula, formula
     # switch everything to the specified device
     x_train, u_train = train_traj[0].to(device), train_traj[1].to(device)
     x_eval, u_eval = eval_traj[0].to(device), eval_traj[1].to(device)
+
     imgs_train, imgs_eval = imgs
     centers_train, centers_eval = centers
     imgs_train = imgs_train.to(device)
@@ -391,12 +397,19 @@ def train_cnn(model, train_traj, eval_traj, imgs, tls, centers, formula, formula
     x_eval_ = model.unstandardize_x(x_eval)
     u_eval_ = model.unstandardize_u(u_eval)
 
+    x_true_train = x_train_.view([-1,hps.expert_mini_bs, *x_train_.shape[-2:]]).cpu()
+    u_true_train = u_train_.view([-1,hps.expert_mini_bs, *u_train_.shape[-2:]]).cpu()
+
+    x_true_eval = x_eval_.view([-1,hps.expert_mini_bs, *x_eval_.shape[-2:]]).cpu()
+    u_true_eval = u_eval_.view([-1,hps.expert_mini_bs, *u_eval_.shape[-2:]]).cpu()
+
 
     T = x_train.shape[1] + 10
 
     time = torch.arange(T).unsqueeze(-1).repeat(1, hps.expert_mini_bs) * model.dt
-    centers_ic_plotting = np.round(np.arange(2,10, dtype=float) + 0.5, 1)    # 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5  and one decimal place
-
+    centers_ic_plotting = np.round(np.arange(2,10, dtype=float) + 0.5, 1)    # 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5 
+        # ic_imgs_plotting = torch.cat([convert_env_img_to_tensor(os.path.join(pardir, "figs/environments/%.1f"%cb)) for cb in centers_ic_plotting], dim=0).to(device)
+    ic_imgs_plotting = torch.stack([generate_img_tensor_parameter(ci) for ci in centers_ic_plotting]).to(device)
     with tqdm(total=(iter_max - train_iteration)) as pbar:
         while True:
             if train_iteration == iter_max:
@@ -426,7 +439,15 @@ def train_cnn(model, train_traj, eval_traj, imgs, tls, centers, formula, formula
 
 
                 optimizer.zero_grad()
-                ic = ic_.to(device).float()        # [bs, 1, x_dim]
+                ic = ic_["ic"].to(device).float()        # [bs, 1, x_dim]
+                if "adv_ic" in ic_.keys():
+                    adv_ic = ic_["adv_ic"].to(device).float()
+                    adv_img_p =  ic_["adv_img_p"].float()
+                    adv_samples = True
+                else:
+                    adv_samples = None
+
+
                 model.train()
                 # parameters
                 teacher_training_value = hps.teacher_training(hps_idx)
@@ -442,19 +463,27 @@ def train_cnn(model, train_traj, eval_traj, imgs, tls, centers, formula, formula
                 ic_bs = ic.shape[0]
                 xdim = ic.shape[-1]
                 img_bs = hps.img_bs
-                centers_ic = np.round(1+np.random.rand(img_bs) * 9, 1)    # between 1-10, and one decimal place
+                centers_ic = np.round(1+np.random.rand(img_bs) * 9, 2)    # between 1-10, and two decimal place
                 # GROSS -- hard coding some parameters here :/ 
                 final_x = model.env.final.center[0]
                 obs_x = (centers_ic + final_x) / 2
                 model.env.covers[0].center = torch.tensor(np.stack([centers_ic, 3.5 * np.ones_like(centers_ic)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
                 model.env.obs[0].center = torch.tensor(np.stack([obs_x, 9. * np.ones_like(obs_x)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
                 
-                ic_imgs = torch.cat([convert_env_img_to_tensor(os.path.join(pardir, "figs/environments/%.1f"%cb)) for cb in centers_ic], dim=0).to(device)
-                # torch.stack([generate_img_tensor_parameter(ci).permute(2,0,1) for ci in centers_ic])
-                
+                # ic_imgs = torch.cat([convert_env_img_to_tensor(os.path.join(pardir, "figs/environments/%.1f"%cb)) for cb in centers_ic], dim=0).to(device)
+                ic_imgs = torch.stack([generate_img_tensor_parameter(ci) for ci in centers_ic]).to(device)
+
                 ic_batch = ic[None,...].repeat([img_bs,1,1,1]).view(-1, 1, xdim)
                 img_batch = ic_imgs.unsqueeze(1).repeat([1, ic_bs, 1, 1, 1]).view([-1, *ic_imgs.shape[-3:]])
 
+                if adv_samples is not None:
+                    centers_ic = adv_img_p    # between 1-10, and two decimal place
+                    final_x = model.env.final.center[0]
+                    obs_x = (centers_ic + final_x) / 2
+                    model.env.covers[0].center = torch.cat([model.env.covers[0].center, torch.stack([centers_ic, 3.5 * torch.ones_like(centers_ic)], dim=1).unsqueeze(1)], dim=0)
+                    model.env.obs[0].center = torch.cat([model.env.obs[0].center, torch.stack([obs_x, 9. * torch.ones_like(obs_x)], dim=1).unsqueeze(1)], dim=0)
+                    ic_batch = torch.cat([ic_batch, adv_ic], dim=0)
+                    img_batch = torch.cat([img_batch, torch.stack([generate_img_tensor_parameter(ci) for ci in centers_ic]).to(device)], dim=0)
                 x_future, u_future = model.propagate_n(T, ic_batch, img_batch)
                 complete_traj = model.join_partial_future_signal(ic_batch, x_future)      # [bs, time_dim, x_dim]
 
@@ -463,8 +492,9 @@ def train_cnn(model, train_traj, eval_traj, imgs, tls, centers, formula, formula
                 loss_stl_true = model.STL_loss(complete_traj, formula, formula_input_func, scale=-1)
 
                 # total loss
+
                 loss = hps.weight_recon * loss_recon + weight_stl * loss_stl
-    
+
 
                 if (train_iteration % 10) == 0:
                     
@@ -515,25 +545,232 @@ def train_cnn(model, train_traj, eval_traj, imgs, tls, centers, formula, formula
                     nan_flag = True
                 optimizer.zero_grad()
 
-                writer.add_scalar('train/loss/state', loss_state, gradient_step)
-                writer.add_scalar('train/loss/ctrl', loss_ctrl, gradient_step)
-                writer.add_scalar('train/loss/STL', loss_stl, gradient_step)
-                writer.add_scalar('train/loss/STL_true', loss_stl_true, gradient_step)
-                writer.add_scalar('train/loss/total', loss, gradient_step)
-                writer.add_scalar('train/parameters/teacher_training', teacher_training_value, gradient_step)
-                writer.add_scalar('train/parameters/stl_scale', stl_scale_value, gradient_step)
-                writer.add_scalar('train/parameters/weight_stl', weight_stl, gradient_step)
 
-                # plotting progress
-                if batch_idx % 20 == 0:
 
+                if writer is not None:
+                    writer.add_scalar('train/loss/state', loss_state, gradient_step)
+                    writer.add_scalar('train/loss/ctrl', loss_ctrl, gradient_step)
+                    writer.add_scalar('train/loss/STL', loss_stl, gradient_step)
+                    writer.add_scalar('train/loss/STL_true', loss_stl_true, gradient_step)
+                    writer.add_scalar('train/loss/total', loss, gradient_step)
+                    writer.add_scalar('train/parameters/teacher_training', teacher_training_value, gradient_step)
+                    writer.add_scalar('train/parameters/stl_scale', stl_scale_value, gradient_step)
+                    writer.add_scalar('train/parameters/weight_stl', weight_stl, gradient_step)
+
+                if nan_flag:
+                    # don't take step, wait for a new batch
+                    continue
+                loss.backward()
+                optimizer.step()
+                gradient_step += 1
+
+
+
+            torch.save({
+                        'train_iteration': train_iteration,
+                        'gradient_step': gradient_step,
+                        'eval_iteration': eval_iteration,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'loss': loss,
+                        'ic': ic},
+                        save_model_path + "/model_{:02d}_iteration={:03d}".format(number, train_iteration))
+
+            # plotting progress
+            if (train_iteration % plot_freq) == 0:
+                # compute trajectories with fixed imgs
+                # with new ICs, propagate the trajectories
+                ic_bs = ic.shape[0]
+                xdim = ic.shape[-1]
+                img_bs = len(centers_ic_plotting)
+
+                # GROSS -- hard coding some parameters here :/ 
+                final_x = model.env.final.center[0]
+                obs_x = (centers_ic_plotting + final_x) / 2
+                model.env.covers[0].center = torch.tensor(np.stack([centers_ic_plotting, 3.5 * np.ones_like(centers_ic_plotting)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+                model.env.obs[0].center = torch.tensor(np.stack([obs_x, 9. * np.ones_like(obs_x)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+            
+
+                ic_batch = ic[None,...].repeat([img_bs,1,1,1]).view(-1, 1, xdim)
+                img_batch = ic_imgs_plotting.unsqueeze(1).repeat([1, ic_bs, 1, 1, 1]).view([-1, *ic_imgs_plotting.shape[-3:]])
+
+                x_future, u_future = model.propagate_n(T, ic_batch, img_batch)
+                complete_traj = model.join_partial_future_signal(ic_batch, x_future)      # [bs, time_dim, x_dim]
+
+                # plotting trajectories from initial condition
+                # trajectories from propagating initial states
+                traj_np = model.unstandardize_x(complete_traj).view(img_bs, ic_bs, T+1, xdim).cpu().detach()
+
+                # trajectory plot
+                fig1, ax1s = plt.subplots(2, img_bs//2, figsize=(20,10))
+                cover_center_list = model.env.covers[0].center.view(img_bs, ic_bs, 1, 2)[:,0]
+                obs_center_list = model.env.obs[0].center.view(img_bs, ic_bs, 1, 2)[:,0]
+
+                for i in range(img_bs):
+                    env_tmp.covers[0].center = list(cover_center_list[i].squeeze().numpy())
+                    env_tmp.obs[0].center = list(obs_center_list[i].squeeze().numpy())
+                    
+                    ax = ax1s[i//(img_bs//2), i % (img_bs//2)]
+                    ax.grid(zorder=0)
+                    _, ax = env_tmp.draw2D(ax=ax, kwargs=draw_params)
+                    ax.axis("equal")
+                    ax.set_title("%i: cover_x = %.1f"%(i+1, env_tmp.covers[0].center[0]))
+                    ax.plot(traj_np[i,:,:,0].T, traj_np[i,:,:,1].T, alpha=0.4, c='RoyalBlue', zorder=5)
+                    ax.scatter(traj_np[i,:,:,0].T, traj_np[i,:,:,1].T, alpha=0.4, c='RoyalBlue', zorder=5)
+                    ax.set_xlim(xlim)
+                    ax.set_ylim(ylim)
+                if writer is not None:
+                    writer.add_figure('train/trajectories_from_ic', fig1, gradient_step)
+
+
+                # trajectories from expert
+                expert_bs = centers_train.shape[0]
+                expert_mini_bs = hps.expert_mini_bs
+
+                # trajectory from propagating initial state of expert trajectory
+                x_future, u_future = model.propagate_n(T, x_train[:,:1,:], imgs_train)
+                x_traj_prop = model.join_partial_future_signal(x_train[:,:1,:], x_future)
+                x_traj_prop = model.unstandardize_x(x_traj_prop).view([-1,expert_mini_bs, *x_traj_prop.shape[-2:]]).detach().cpu().numpy()
+                # trajectory from teacher training, and used for reconstruction loss (what the training sees)
+                x_traj_pred = model.unstandardize_x(x_traj_pred).view([-1,expert_mini_bs, *x_traj_pred.shape[-2:]]).detach().cpu().numpy()
+
+                
+                center_list = centers_train.view(-1, expert_mini_bs)[:,0]
+                height = 2
+                width = (expert_bs//expert_mini_bs)//height
+
+                fig2, ax2s = plt.subplots(height, width, figsize=(25,10))
+                
+                final_x = env_tmp.final.center[0]
+                tls = tls_train.view(-1, expert_mini_bs).int() - 1
+
+                for i in range(width * height):
+                    center_x = center_list[i].numpy().item()
+                    obs_x = (center_x + final_x) / 2
+                    env_tmp.covers[0].center = [center_x, 3.5]
+                    env_tmp.obs[0].center = [obs_x, 9.0]
+                    ax = ax2s[i//width, i % width]
+                    ax.grid(zorder=0)
+                    _, ax = env_tmp.draw2D(ax=ax, kwargs=draw_params)
+                    ax.axis("equal")
+                    ax.set_title("cover_x = %.1f"%(env_tmp.covers[0].center[0]))
+                    ax.plot(x_traj_prop[i,:,:,0].T, x_traj_prop[i,:,:,1].T, alpha=0.4, c='dodgerblue', zorder=5)
+                    ax.scatter(x_traj_prop[i,:,:,0].T, x_traj_prop[i,:,:,1].T, alpha=0.4, c='dodgerblue', zorder=5)
+                    for j in range(expert_mini_bs):
+                        ax.plot(x_traj_pred[i,j,:tls[i,j],0].T, x_traj_pred[i,j,:tls[i,j],1].T, alpha=0.4, c='IndianRed', zorder=5)
+                        ax.scatter(x_traj_pred[i,j,:tls[i,j],0].T, x_traj_pred[i,j,:tls[i,j],1].T, alpha=0.4, c='IndianRed', zorder=5)
+                        ax.plot(x_true_train[i,j,:tls[i,j],0].T, x_true_train[i,j,:tls[i,j],1].T, alpha=0.4, c='ForestGreen', zorder=2)
+                        ax.scatter(x_true_train[i,j,:tls[i,j],0].T, x_true_train[i,j,:tls[i,j],1].T, alpha=0.4, c='ForestGreen', zorder=2)
+                    ax.axis("equal")
+                    ax.set_xlim(xlim)
+                    ax.set_ylim(ylim)
+
+                if writer is not None:
+                    writer.add_figure('train/trajectories_from_expert', fig2, gradient_step)
+
+                # plotting controls
+                u_traj_prop = model.unstandardize_u(u_future).cpu().detach().view([-1,expert_mini_bs, *u_future.shape[-2:]])
+                
+                fig3, ax3s = plt.subplots(height, width, figsize=(20,8))
+                ctrl_idx = 0
+                for i in range(width * height):
+                    ax = ax3s[i//width, i % width]
+                    ax.plot(time, u_traj_prop[i,:,:,ctrl_idx].T, alpha=0.4, c='dodgerblue', zorder=5)
+                    ax.scatter(time, u_traj_prop[i,:,:,ctrl_idx].T, alpha=0.4, c='dodgerblue', zorder=5)
+                    for j in range(expert_mini_bs):
+                        time_j = torch.arange(tls[i,j]) * model.dt
+                        ax.plot(time_j, u_true_train[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
+                        ax.scatter(time_j, u_true_train[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
+                        ax.grid()
+                        ax.set_xlim([0,T * model.dt])
+                        ax.set_ylim([-3.5, 3.5])
+                if writer is not None:
+                    writer.add_figure('train/acceleration_from_expert', fig3, gradient_step)
+
+                fig4, ax4s = plt.subplots(height, width, figsize=(20,8))
+                ctrl_idx = 1
+                for i in range(width * height):
+                    ax = ax4s[i//width, i % width]
+                    ax.plot(time, u_traj_prop[i,:,:,ctrl_idx].T, alpha=0.4, c='dodgerblue', zorder=5)
+                    ax.scatter(time, u_traj_prop[i,:,:,ctrl_idx].T, alpha=0.4, c='dodgerblue', zorder=5)
+                    for j in range(expert_mini_bs):
+                        time_j = torch.arange(tls[i,j]) * model.dt
+                        ax.plot(time_j, u_true_train[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
+                        ax.scatter(time_j, u_true_train[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
+                        ax.grid()
+                        ax.set_xlim([0,T * model.dt])
+                        ax.set_ylim([-0.4, 0.4])
+
+                if writer is not None:
+                    writer.add_figure('train/steering_from_expert', fig3, gradient_step)
+
+                fig1.savefig(fig_dir + '/train/ic_trajectory_number={:02d}_iteration={:03d}.png'.format(number, train_iteration))
+                fig2.savefig(fig_dir + '/train/expert_trajectory_number={:02d}_iteration={:03d}.png'.format(number, train_iteration))
+                fig3.savefig(fig_dir + '/train/acceleration_number={:02d}_iteration={:03d}.png'.format(number, train_iteration))
+                fig4.savefig(fig_dir + '/train/delta_number={:02d}_iteration={:03d}.png'.format(number, train_iteration))
+                
+                plt.close(fig1)
+                plt.close(fig2)
+                plt.close(fig3)
+                plt.close(fig4)
+
+            train_iteration += 1 
+
+
+
+            # evaluation set
+            model.eval()
+
+            for (batch_idx, ic_) in enumerate(eval_loader):
+                ic = ic_["ic"].to(device).float()        # [bs, 1, x_dim]
+                model.eval()
+
+
+                # reconstruct the expert model
+                loss_state, loss_ctrl, x_traj_pred, u_traj_pred = model.reconstruction_loss(x_eval, u_eval, imgs_eval, tls_eval, teacher_training=1.0)
+                loss_recon = loss_state + hps.weight_ctrl * loss_ctrl
+
+
+                # with new ICs, propagate the trajectories
+                ic_bs = ic.shape[0]
+                xdim = ic.shape[-1]
+                img_bs = hps.img_bs
+                centers_ic = np.round(1+np.random.rand(img_bs) * 9, 2)    # between 1-10, and two decimal place
+                # GROSS -- hard coding some parameters here :/ 
+                final_x = model.env.final.center[0]
+                obs_x = (centers_ic + final_x) / 2
+                model.env.covers[0].center = torch.tensor(np.stack([centers_ic, 3.5 * np.ones_like(centers_ic)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+                model.env.obs[0].center = torch.tensor(np.stack([obs_x, 9. * np.ones_like(obs_x)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+                
+                # ic_imgs = torch.cat([convert_env_img_to_tensor(os.path.join(pardir, "figs/environments/%.1f"%cb)) for cb in centers_ic], dim=0).to(device)
+                ic_imgs = torch.stack([generate_img_tensor_parameter(ci) for ci in centers_ic]).to(device)
+                
+                ic_batch = ic[None,...].repeat([img_bs,1,1,1]).view(-1, 1, xdim)
+                img_batch = ic_imgs.unsqueeze(1).repeat([1, ic_bs, 1, 1, 1]).view([-1, *ic_imgs.shape[-3:]])
+
+                x_future, u_future = model.propagate_n(T, ic_batch, img_batch)
+                complete_traj = model.join_partial_future_signal(ic_batch, x_future)      # [bs, time_dim, x_dim]
+
+                # stl loss
+                loss_stl = model.STL_loss(complete_traj, formula, formula_input_func, scale=stl_scale_value)
+                loss_stl_true = model.STL_loss(complete_traj, formula, formula_input_func, scale=-1)
+
+                # total loss
+                loss = hps.weight_recon * loss_recon + weight_stl * loss_stl
+
+
+                if writer is not None:
+                    writer.add_scalar('eval/state', loss_state, eval_iteration)
+                    writer.add_scalar('eval/ctrl', loss_ctrl, eval_iteration)
+                    writer.add_scalar('eval/STL', loss_stl, eval_iteration)
+                    writer.add_scalar('eval/total', loss, eval_iteration)
+
+                # plotting
+                if (eval_iteration % plot_freq) == 0:
 
                     # compute trajectories with fixed imgs
                     # with new ICs, propagate the trajectories
-                    ic_bs = ic.shape[0]
-                    xdim = ic.shape[-1]
                     img_bs = len(centers_ic_plotting)
-
                     # GROSS -- hard coding some parameters here :/ 
                     final_x = model.env.final.center[0]
                     obs_x = (centers_ic_plotting + final_x) / 2
@@ -568,32 +805,31 @@ def train_cnn(model, train_traj, eval_traj, imgs, tls, centers, formula, formula
                         ax.set_title("%i: cover_x = %.1f"%(i+1, env_tmp.covers[0].center[0]))
                         ax.plot(traj_np[i,:,:,0].T, traj_np[i,:,:,1].T, alpha=0.4, c='RoyalBlue', zorder=5)
                         ax.scatter(traj_np[i,:,:,0].T, traj_np[i,:,:,1].T, alpha=0.4, c='RoyalBlue', zorder=5)
-                        ax.set_xlim([-5, 15])
-                        ax.set_ylim([-5, 15])
-
-                    writer.add_figure('train/trajectories_from_ic', fig1, gradient_step)
-
+                        ax.set_xlim(xlim)
+                        ax.set_ylim(ylim)
+                    if writer is not None:
+                        writer.add_figure('eval/trajectories_from_ic', fig1, gradient_step)
 
                     # trajectories from expert
-                    expert_bs = centers_train.shape[0]
+                    expert_bs = centers_eval.shape[0]
                     expert_mini_bs = hps.expert_mini_bs
 
                     # trajectory from propagating initial state of expert trajectory
-                    x_future, u_future = model.propagate_n(T, x_train[:,:1,:], imgs_train)
-                    x_traj_prop = model.join_partial_future_signal(x_train[:,:1,:], x_future)
+                    x_future, u_future = model.propagate_n(T, x_eval[:,:1,:], imgs_eval)
+                    x_traj_prop = model.join_partial_future_signal(x_eval[:,:1,:], x_future)
                     x_traj_prop = model.unstandardize_x(x_traj_prop).view([-1,expert_mini_bs, *x_traj_prop.shape[-2:]]).detach().cpu().numpy()
                     # trajectory from teacher training, and used for reconstruction loss (what the training sees)
                     x_traj_pred = model.unstandardize_x(x_traj_pred).view([-1,expert_mini_bs, *x_traj_pred.shape[-2:]]).detach().cpu().numpy()
 
                     
-                    center_list = centers_train.view(-1, expert_mini_bs)[:,0]
+                    center_list = centers_eval.view(-1, expert_mini_bs)[:,0]
                     height = 2
                     width = (expert_bs//expert_mini_bs)//height
 
-                    fig2, ax2s = plt.subplots(height, width, figsize=(10,10))
+                    fig2, ax2s = plt.subplots(height, width, figsize=(25,10))
                     
                     final_x = env_tmp.final.center[0]
-                    tls = tls_train.view(-1, expert_mini_bs).int() - 1
+                    tls = tls_eval.view(-1, expert_mini_bs).int() - 1
 
                     for i in range(width * height):
                         center_x = center_list[i].numpy().item()
@@ -610,16 +846,16 @@ def train_cnn(model, train_traj, eval_traj, imgs, tls, centers, formula, formula
                         for j in range(expert_mini_bs):
                             ax.plot(x_traj_pred[i,j,:tls[i,j],0].T, x_traj_pred[i,j,:tls[i,j],1].T, alpha=0.4, c='IndianRed', zorder=5)
                             ax.scatter(x_traj_pred[i,j,:tls[i,j],0].T, x_traj_pred[i,j,:tls[i,j],1].T, alpha=0.4, c='IndianRed', zorder=5)
-                        ax.set_xlim([-5, 15])
-                        ax.set_ylim([-5, 15])
-
-                    writer.add_figure('train/trajectories_from_expert', fig2, gradient_step)
-
+                            ax.plot(x_true_eval[i,j,:tls[i,j],0].T, x_true_eval[i,j,:tls[i,j],1].T, alpha=0.4, c='ForestGreen', zorder=2)
+                            ax.scatter(x_true_eval[i,j,:tls[i,j],0].T, x_true_eval[i,j,:tls[i,j],1].T, alpha=0.4, c='ForestGreen', zorder=2)
+                        ax.set_xlim(xlim)
+                        ax.set_ylim(ylim)
+                    if writer is not None:
+                        writer.add_figure('eval/trajectories_from_expert', fig2, gradient_step)
 
                     # plotting controls
-                    u_true = u_train_.view([-1,expert_mini_bs, *u_train_.shape[-2:]]).cpu()
                     u_traj_prop = model.unstandardize_u(u_future).cpu().detach().view([-1,expert_mini_bs, *u_future.shape[-2:]])
-                    
+
                     fig3, ax3s = plt.subplots(height, width, figsize=(20,8))
                     ctrl_idx = 0
                     for i in range(width * height):
@@ -628,13 +864,13 @@ def train_cnn(model, train_traj, eval_traj, imgs, tls, centers, formula, formula
                         ax.scatter(time, u_traj_prop[i,:,:,ctrl_idx].T, alpha=0.4, c='dodgerblue', zorder=5)
                         for j in range(expert_mini_bs):
                             time_j = torch.arange(tls[i,j]) * model.dt
-                            ax.plot(time_j, u_true[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
-                            ax.scatter(time_j, u_true[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
+                            ax.plot(time_j, u_true_eval[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
+                            ax.scatter(time_j, u_true_eval[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
                             ax.grid()
                             ax.set_xlim([0,T * model.dt])
                             ax.set_ylim([-3.5, 3.5])
-
-                    writer.add_figure('train/acceleration_from_expert', fig3, gradient_step)
+                    if writer is not None:
+                        writer.add_figure('eval/acceleration_from_expert', fig3, gradient_step)
 
                     fig4, ax4s = plt.subplots(height, width, figsize=(20,8))
                     ctrl_idx = 1
@@ -644,212 +880,27 @@ def train_cnn(model, train_traj, eval_traj, imgs, tls, centers, formula, formula
                         ax.scatter(time, u_traj_prop[i,:,:,ctrl_idx].T, alpha=0.4, c='dodgerblue', zorder=5)
                         for j in range(expert_mini_bs):
                             time_j = torch.arange(tls[i,j]) * model.dt
-                            ax.plot(time_j, u_true[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
-                            ax.scatter(time_j, u_true[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
+                            ax.plot(time_j, u_true_eval[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
+                            ax.scatter(time_j, u_true_eval[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
                             ax.grid()
                             ax.set_xlim([0,T * model.dt])
                             ax.set_ylim([-0.4, 0.4])
-                    writer.add_figure('train/steering_from_expert', fig3, gradient_step)
 
-                if nan_flag:
-                    # don't take step, wait for a new batch
-                    continue
-                loss.backward()
-                optimizer.step()
-                gradient_step += 1
+                    if writer is not None:
+                        writer.add_figure('eval/steering_from_expert', fig3, gradient_step)
 
-            fig1.savefig(fig_dir + '/train/number={:02d}_iteration={:03d}.png'.format(number, train_iteration))
-
-            torch.save({
-                        'train_iteration': train_iteration,
-                        'gradient_step': gradient_step,
-                        'eval_iteration': eval_iteration,
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'loss': loss,
-                        'ic': ic},
-                        save_model_path + "/model_{:02d}_iteration={:03d}".format(number, train_iteration))
-            plt.close(fig1)
-            plt.close(fig2)
-            plt.close(fig3)
-            plt.close(fig4)
-
-
-            # evaluation set
-            model.eval()
-            for (batch_idx, ic_) in enumerate(eval_loader):
-              
-                ic = ic_.to(device).float()        # [bs, 1, x_dim]
-                model.eval()
-
-
-                # reconstruct the expert model
-                loss_state, loss_ctrl, x_traj_pred, u_traj_pred = model.reconstruction_loss(x_eval, u_eval, imgs_eval, tls_eval, teacher_training=1.0)
-                loss_recon = loss_state + hps.weight_ctrl * loss_ctrl
-
-
-                # with new ICs, propagate the trajectories
-                ic_bs = ic.shape[0]
-                xdim = ic.shape[-1]
-                img_bs = hps.img_bs
-                centers_ic = np.round(1+np.random.rand(img_bs) * 9, 1)    # between 1-10, and one decimal place
-                # GROSS -- hard coding some parameters here :/ 
-                final_x = model.env.final.center[0]
-                obs_x = (centers_ic + final_x) / 2
-                model.env.covers[0].center = torch.tensor(np.stack([centers_ic, 3.5 * np.ones_like(centers_ic)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
-                model.env.obs[0].center = torch.tensor(np.stack([obs_x, 9. * np.ones_like(obs_x)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
-                
-                ic_imgs = torch.cat([convert_env_img_to_tensor(os.path.join(pardir, "figs/environments/%.1f"%cb)) for cb in centers_ic], dim=0).to(device)
-                
-                ic_batch = ic[None,...].repeat([img_bs,1,1,1]).view(-1, 1, xdim)
-                img_batch = ic_imgs.unsqueeze(1).repeat([1, ic_bs, 1, 1, 1]).view([-1, *ic_imgs.shape[-3:]])
-
-                x_future, u_future = model.propagate_n(T, ic_batch, img_batch)
-                complete_traj = model.join_partial_future_signal(ic_batch, x_future)      # [bs, time_dim, x_dim]
-
-                # stl loss
-                loss_stl = model.STL_loss(complete_traj, formula, formula_input_func, scale=stl_scale_value)
-                loss_stl_true = model.STL_loss(complete_traj, formula, formula_input_func, scale=-1)
-
-                # total loss
-                loss = hps.weight_recon * loss_recon + weight_stl * loss_stl
-
-
-
-                writer.add_scalar('eval/state', loss_state, eval_iteration)
-                writer.add_scalar('eval/ctrl', loss_ctrl, eval_iteration)
-                writer.add_scalar('eval/STL', loss_stl, eval_iteration)
-                writer.add_scalar('eval/total', loss, eval_iteration)
-
-                # plotting
-           
-                # compute trajectories with fixed imgs
-                # with new ICs, propagate the trajectories
-                img_bs = len(centers_ic_plotting)
-                # GROSS -- hard coding some parameters here :/ 
-                final_x = model.env.final.center[0]
-                obs_x = (centers_ic_plotting + final_x) / 2
-                model.env.covers[0].center = torch.tensor(np.stack([centers_ic_plotting, 3.5 * np.ones_like(centers_ic_plotting)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
-                model.env.obs[0].center = torch.tensor(np.stack([obs_x, 9. * np.ones_like(obs_x)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
-                
-                ic_imgs = torch.cat([convert_env_img_to_tensor(os.path.join(pardir, "figs/environments/%.1f"%cb)) for cb in centers_ic_plotting], dim=0).to(device)
-                
-                ic_batch = ic[None,...].repeat([img_bs,1,1,1]).view(-1, 1, xdim)
-                img_batch = ic_imgs.unsqueeze(1).repeat([1, ic_bs, 1, 1, 1]).view([-1, *ic_imgs.shape[-3:]])
-
-                x_future, u_future = model.propagate_n(T, ic_batch, img_batch)
-                complete_traj = model.join_partial_future_signal(ic_batch, x_future)      # [bs, time_dim, x_dim]
-
-                # plotting trajectories from initial condition
-                # trajectories from propagating initial states
-                traj_np = model.unstandardize_x(complete_traj).view(img_bs, ic_bs, T+1, xdim).cpu().detach()
-
-                # trajectory plot
-                fig1, ax1s = plt.subplots(2, img_bs//2, figsize=(20,10))
-                cover_center_list = model.env.covers[0].center.view(img_bs, ic_bs, 1, 2)[:,0]
-                obs_center_list = model.env.obs[0].center.view(img_bs, ic_bs, 1, 2)[:,0]
-
-                for i in range(img_bs):
-                    env_tmp.covers[0].center = list(cover_center_list[i].squeeze().numpy())
-                    env_tmp.obs[0].center = list(obs_center_list[i].squeeze().numpy())
-                    
-                    ax = ax1s[i//(img_bs//2), i % (img_bs//2)]
-                    ax.grid(zorder=0)
-                    _, ax = env_tmp.draw2D(ax=ax, kwargs=draw_params)
-                    ax.axis("equal")
-                    ax.set_title("%i: cover_x = %.1f"%(i+1, env_tmp.covers[0].center[0]))
-                    ax.plot(traj_np[i,:,:,0].T, traj_np[i,:,:,1].T, alpha=0.4, c='RoyalBlue', zorder=5)
-                    ax.scatter(traj_np[i,:,:,0].T, traj_np[i,:,:,1].T, alpha=0.4, c='RoyalBlue', zorder=5)
-                    ax.set_xlim([-5, 15])
-                    ax.set_ylim([-5, 15])
-
-                writer.add_figure('eval/trajectories_from_ic', fig1, gradient_step)
-
-                # trajectories from expert
-                expert_bs = centers_eval.shape[0]
-                expert_mini_bs = hps.expert_mini_bs
-
-                # trajectory from propagating initial state of expert trajectory
-                x_future, u_future = model.propagate_n(T, x_eval[:,:1,:], imgs_eval)
-                x_traj_prop = model.join_partial_future_signal(x_eval[:,:1,:], x_future)
-                x_traj_prop = model.unstandardize_x(x_traj_prop).view([-1,expert_mini_bs, *x_traj_prop.shape[-2:]]).detach().cpu().numpy()
-                # trajectory from teacher training, and used for reconstruction loss (what the training sees)
-                x_traj_pred = model.unstandardize_x(x_traj_pred).view([-1,expert_mini_bs, *x_traj_pred.shape[-2:]]).detach().cpu().numpy()
-
-                
-                center_list = centers_eval.view(-1, expert_mini_bs)[:,0]
-                height = 2
-                width = (expert_bs//expert_mini_bs)//height
-
-                fig2, ax2s = plt.subplots(height, width, figsize=(10,10))
-                
-                final_x = env_tmp.final.center[0]
-                tls = tls_eval.view(-1, expert_mini_bs).int() - 1
-
-                for i in range(width * height):
-                    center_x = center_list[i].numpy().item()
-                    obs_x = (center_x + final_x) / 2
-                    env_tmp.covers[0].center = [center_x, 3.5]
-                    env_tmp.obs[0].center = [obs_x, 9.0]
-                    ax = ax2s[i//width, i % width]
-                    ax.grid(zorder=0)
-                    _, ax = env_tmp.draw2D(ax=ax, kwargs=draw_params)
-                    ax.axis("equal")
-                    ax.set_title("cover_x = %.1f"%(env_tmp.covers[0].center[0]))
-                    ax.plot(x_traj_prop[i,:,:,0].T, x_traj_prop[i,:,:,1].T, alpha=0.4, c='dodgerblue', zorder=5)
-                    ax.scatter(x_traj_prop[i,:,:,0].T, x_traj_prop[i,:,:,1].T, alpha=0.4, c='dodgerblue', zorder=5)
-                    for j in range(expert_mini_bs):
-                        ax.plot(x_traj_pred[i,j,:tls[i,j],0].T, x_traj_pred[i,j,:tls[i,j],1].T, alpha=0.4, c='IndianRed', zorder=5)
-                        ax.scatter(x_traj_pred[i,j,:tls[i,j],0].T, x_traj_pred[i,j,:tls[i,j],1].T, alpha=0.4, c='IndianRed', zorder=5)
-                    ax.set_xlim([-5, 15])
-                    ax.set_ylim([-5, 15])
-
-                writer.add_figure('eval/trajectories_from_expert', fig2, gradient_step)
-
-                # plotting controls
-                u_true = u_eval_.view([-1,expert_mini_bs, *u_eval_.shape[-2:]]).cpu()
-                u_traj_prop = model.unstandardize_u(u_future).cpu().detach().view([-1,expert_mini_bs, *u_future.shape[-2:]])
-
-                fig3, ax3s = plt.subplots(height, width, figsize=(20,8))
-                ctrl_idx = 0
-                for i in range(width * height):
-                    ax = ax3s[i//width, i % width]
-                    ax.plot(time, u_traj_prop[i,:,:,ctrl_idx].T, alpha=0.4, c='dodgerblue', zorder=5)
-                    ax.scatter(time, u_traj_prop[i,:,:,ctrl_idx].T, alpha=0.4, c='dodgerblue', zorder=5)
-                    for j in range(expert_mini_bs):
-                        time_j = torch.arange(tls[i,j]) * model.dt
-                        ax.plot(time_j, u_true[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
-                        ax.scatter(time_j, u_true[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
-                        ax.grid()
-                        ax.set_xlim([0,T * model.dt])
-                        ax.set_ylim([-3.5, 3.5])
-
-                writer.add_figure('eval/acceleration_from_expert', fig3, gradient_step)
-
-                fig4, ax4s = plt.subplots(height, width, figsize=(20,8))
-                ctrl_idx = 1
-                for i in range(width * height):
-                    ax = ax4s[i//width, i % width]
-                    ax.plot(time, u_traj_prop[i,:,:,ctrl_idx].T, alpha=0.4, c='dodgerblue', zorder=5)
-                    ax.scatter(time, u_traj_prop[i,:,:,ctrl_idx].T, alpha=0.4, c='dodgerblue', zorder=5)
-                    for j in range(expert_mini_bs):
-                        time_j = torch.arange(tls[i,j]) * model.dt
-                        ax.plot(time_j, u_true[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
-                        ax.scatter(time_j, u_true[i,j,:tls[i,j],ctrl_idx].T, alpha=0.4, c='IndianRed', zorder=5)
-                        ax.grid()
-                        ax.set_xlim([0,T * model.dt])
-                        ax.set_ylim([-0.4, 0.4])
-                writer.add_figure('eval/steering_from_expert', fig3, gradient_step)
-
-                fig1.savefig(fig_dir + '/eval/number={:02d}_iteration={:03d}.png'.format(number, eval_iteration))
-                plt.close(fig1)
-                plt.close(fig2)
-                plt.close(fig3)
-                plt.close(fig4)
-                eval_iteration += 1
+                    fig1.savefig(fig_dir + '/eval/ic_trajectory_number={:02d}_iteration={:03d}.png'.format(number, eval_iteration))
+                    fig2.savefig(fig_dir + '/eval/expert_trajectory_number={:02d}_iteration={:03d}.png'.format(number, eval_iteration))
+                    fig3.savefig(fig_dir + '/eval/acceleration_number={:02d}_iteration={:03d}.png'.format(number, eval_iteration))
+                    fig4.savefig(fig_dir + '/eval/delta_number={:02d}_iteration={:03d}.png'.format(number, eval_iteration))
+                    plt.close(fig1)
+                    plt.close(fig2)
+                    plt.close(fig3)
+                    plt.close(fig4)
                 break
-
-            train_iteration += 1 # i is num of runs through the data set
+                
+            eval_iteration += 1
+                
 
 
 

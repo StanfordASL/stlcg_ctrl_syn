@@ -5,8 +5,15 @@ sys.path.append('../')
 import stlcg
 import matplotlib.pyplot as plt
 
+import os
+
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvas
+
 from torch.utils.data import Dataset, DataLoader
-from PIL import Image
+from PIL import Image, ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
 import torchvision.transforms.functional as TF
 import torchvision
 
@@ -20,6 +27,8 @@ from torch.utils.tensorboard import SummaryWriter
 from environment import *
 import IPython
 import glob
+
+pardir = os.path.dirname(os.path.dirname(__file__))
 
 
 
@@ -52,23 +61,25 @@ def prepare_data_img(filedir, batch_dim=0, height=480, width=480):
     data_list = []
     imgs = torch.zeros([n_data, 4, height, width]).requires_grad_(False)
     tls = torch.zeros([n_data]).requires_grad_(False)
-
+    centers = torch.zeros([n_data]).requires_grad_(False)
 
     for (j,fi) in enumerate(sorted(glob.glob(filedir+'*'))):
         fi_split = fi.split('_')
         i = fi_split[2]
-        imgs[j,:,:,:] = convert_env_img_to_tensor("figs/environments/%.1f"%float(i))
+
+        imgs[j,:,:,:] = convert_env_img_to_tensor(os.path.join(pardir, "figs/environments/%.1f"%float(i)))
         data_j = torch.tensor(np.load(fi)[:,1:]).float()
         data_list.append(data_j)
         traj_length = data_j.shape[0]
         data[j,:traj_length, :] = data_j
 
         tls[j] = traj_length
+        centers[j] = float(i)
 
     μ = torch.cat(data_list, dim=0).mean(0).unsqueeze(0).unsqueeze(0)
     σ = torch.cat(data_list, dim=0).std(0).unsqueeze(0).unsqueeze(0)
 
-    return data[:,:,:4], data[:,:,4:6], tls, imgs, [μ, σ]
+    return data[:,:,:4], data[:,:,4:6], tls, imgs, [μ, σ], centers
 
 def convert_env_img_to_tensor(img_path, grey=torchvision.transforms.Grayscale(), resize=torchvision.transforms.Resize([480, 480])):
     image_tensor = torch.stack([TF.to_tensor(resize(grey(Image.open(img_path + '/init.png')))),
@@ -77,6 +88,73 @@ def convert_env_img_to_tensor(img_path, grey=torchvision.transforms.Grayscale(),
                          TF.to_tensor(resize(grey(Image.open(img_path + '/obs.png'))))], dim=1)
 
     return image_tensor
+
+
+
+def generate_img_tensor(env, width=480, height=480, dpi=500, xlim=[-5,15], ylim=[-5,15]):
+
+    plt_params = {"color": "black", "fill": True}
+    figsize = (width/dpi, height/dpi)
+
+    fig = Figure(figsize=figsize, dpi=dpi)
+    canvas = FigureCanvas(fig)
+    ax = fig.subplots()
+    _, ax = env.initial.draw2D(ax=ax, **plt_params)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.axis('off')
+    canvas.draw()
+    X = np.array(fig.canvas.renderer._renderer)[:,:,:1]/255
+
+    fig = Figure(figsize=figsize, dpi=dpi)
+    canvas = FigureCanvas(fig)
+    ax = fig.subplots()
+    _, ax = env.final.draw2D( ax=ax, **plt_params)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.axis('off')
+    canvas.draw()
+    X = np.concatenate([X, np.array(fig.canvas.renderer._renderer)[:,:,:1]/255], axis=-1)
+
+    fig = Figure(figsize=figsize, dpi=dpi)
+    canvas = FigureCanvas(fig)
+    ax = fig.subplots()
+    for covs in env.covers:
+        _, ax = covs.draw2D( ax=ax, **plt_params)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.axis('off')
+    canvas.draw()
+    X = np.concatenate([X, np.array(fig.canvas.renderer._renderer)[:,:,:1]/255], axis=-1)
+
+    fig = Figure(figsize=figsize, dpi=dpi)
+    canvas = FigureCanvas(fig)
+    ax = fig.subplots()
+    for obs in env.obs:
+        _, ax = obs.draw2D( ax=ax, **plt_params)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.axis('off')
+    canvas.draw()
+    X = np.concatenate([X, np.array(fig.canvas.renderer._renderer)[:,:,:1]/255], axis=-1)
+    
+    return torch.tensor(X).permute(2,0,1).float()
+
+
+
+
+def generate_img_tensor_parameter(cover_x, width=480, height=480, dpi=500, xlim=[-5,15], ylim=[-5,15]):
+    final_x = 5.0
+    obs_x = (cover_x + final_x) / 2
+    params = { "covers": [Circle([cover_x, 3.5], 2.0)],
+       "obstacles": [Circle([obs_x, 9.], 1.5)],
+       "initial": Box([2, -4.],[8, -2]),
+       "final": Circle([final_x, 13], 1.0)
+    } 
+    env = Environment(params)
+
+    return generate_img_tensor(env, width=width, height=height, dpi=dpi, xlim=xlim, ylim=ylim)
+
 
 # class ExpertTrajImageDataset(torch.utils.data.Dataset):
 
@@ -128,12 +206,13 @@ class KinematicBicycle(torch.nn.Module):
         V_min = self.V_min
         V_max = self.V_max
         dt = self.dt
-        dcurr = self.disturbance_dist.sample(xcurr.shape[:-1])
+        dcurr = self.disturbance_dist.sample(xcurr.shape[:-1]).to(xcurr.device).float()
         da, ddelta = dcurr.split(1, dim=-1)
         x, y, psi, V = xcurr.split(1, dim=-1)
         a, delta = ucurr.split(1, dim=-1)
         a = (a + da).clamp(self.a_min, self.a_max)
-        beta = torch.atan(lr / (lr + lf) * torch.tan((delta + ddelta).clamp(delta_min, delta_max)))
+        delta = (delta + ddelta).clamp(delta_min, delta_max)
+        beta = torch.atan(lr / (lr + lf) * torch.tan(delta))
 
         int_V =  torch.where(a == 0,
                              V * dt,
@@ -167,21 +246,24 @@ def initial_conditions(n, a, b):
     return map_to_interval(x0, a, b)
 
 
-class InitialConditionDataset(torch.utils.data.Dataset):
+class InitialConditionDatasetCNN(torch.utils.data.Dataset):
 
-    def __init__(self, n, a, b):
-        self.n = n
-        self.ic = initial_conditions(n, a, b)
+    def __init__(self, initial_conditions, adv_ic=None, adv_img_p=None):
+        self.ic = initial_conditions
+        self.adv_ic = adv_ic
+        self.adv_img_p = adv_img_p
 
 
     def __len__(self):
-        return self.n
+        return self.ic.shape[0]
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
-        return self.ic[idx]
-
+        if self.adv_ic is None:
+            return {"ic": self.ic[idx]}
+        else:
+            return {"ic": self.ic[idx], "adv_ic": self.adv_ic[idx], "adv_img_p": self.adv_img_p[idx]}
 
 def flip_tuple_input(x, time_dim=1):
     if not isinstance(x, tuple):
@@ -350,7 +432,7 @@ class STLPolicy(torch.nn.Module):
             x_input = xs[-1]
             h0 = None
             for t in range(x_true.shape[1]-1):
-                o, u, x_next, h0 = self.forward(x_input, imgs, h0=h0)
+                o, u, x_next, h0 = self.forward(x_input, h0=h0)
                 xs.append(x_next)
                 us.append(u)
                 if prob[t]:
@@ -388,9 +470,39 @@ class STLPolicy(torch.nn.Module):
         return self.STL_robustness(x, formula, formula_input, **kwargs).mean()
 
 def get_tl_elements(data, tls):
-    arange = torch.ones_like(data) * torch.arange(tls.max()).unsqueeze(0).unsqueeze(-1)
+    arange = torch.ones_like(data) * torch.arange(tls.max()).to(data.device).unsqueeze(0).unsqueeze(-1)
     mask = (arange == (tls - 1).unsqueeze(-1).unsqueeze(-1))
     return torch.masked_select(data, mask).view(data.shape[0], 1, data.shape[2])
+
+
+
+
+
+                                                                     
+                                                                     
+#         CCCCCCCCCCCCCNNNNNNNN        NNNNNNNNNNNNNNNN        NNNNNNNN
+#      CCC::::::::::::CN:::::::N       N::::::NN:::::::N       N::::::N
+#    CC:::::::::::::::CN::::::::N      N::::::NN::::::::N      N::::::N
+#   C:::::CCCCCCCC::::CN:::::::::N     N::::::NN:::::::::N     N::::::N
+#  C:::::C       CCCCCCN::::::::::N    N::::::NN::::::::::N    N::::::N
+# C:::::C              N:::::::::::N   N::::::NN:::::::::::N   N::::::N
+# C:::::C              N:::::::N::::N  N::::::NN:::::::N::::N  N::::::N
+# C:::::C              N::::::N N::::N N::::::NN::::::N N::::N N::::::N
+# C:::::C              N::::::N  N::::N:::::::NN::::::N  N::::N:::::::N
+# C:::::C              N::::::N   N:::::::::::NN::::::N   N:::::::::::N
+# C:::::C              N::::::N    N::::::::::NN::::::N    N::::::::::N
+#  C:::::C       CCCCCCN::::::N     N:::::::::NN::::::N     N:::::::::N
+#   C:::::CCCCCCCC::::CN::::::N      N::::::::NN::::::N      N::::::::N
+#    CC:::::::::::::::CN::::::N       N:::::::NN::::::N       N:::::::N
+#      CCC::::::::::::CN::::::N        N::::::NN::::::N        N::::::N
+#         CCCCCCCCCCCCCNNNNNNNN         NNNNNNNNNNNNNNN         NNNNNNN
+                                                                     
+                                                                     
+                                                                     
+                                                                     
+        
+
+
 
 
 class STLCNNPolicy(torch.nn.Module):
@@ -429,6 +541,7 @@ class STLCNNPolicy(torch.nn.Module):
                                                     torch.nn.Tanh(),
                                                     torch.nn.Linear(hidden_dim, hidden_dim))
         self.L2loss = torch.nn.MSELoss()
+        self.leakyrelu = torch.nn.LeakyReLU()
 
     def switch_device(self, device):
         self.a_lim = self.a_lim.to(device)
@@ -475,7 +588,12 @@ class STLCNNPolicy(torch.nn.Module):
             x_next is [bs, time_dim, state_dim] --- propagate dynamics from previous state and computed controls
         '''
         if h0 is None:
-            h0 = self.initial_rnn_state(imgs)
+            h0_ = self.initial_rnn_state(imgs)
+            if (imgs.shape[0] == 1) & (x0.shape[0] > 1):
+                bs = x0.shape[0]
+                h0 = (h0_[0].repeat(1, bs, 1), h0_[1].repeat(1, bs, 1))
+            else:
+                h0 = h0_
 
         o, h0 = self.lstm(x0, h0)    # [bs, time_dim, hidden_dim] , bs = 1 for a single expert trajectory.
 
@@ -496,7 +614,7 @@ class STLCNNPolicy(torch.nn.Module):
 
 
 
-    def propagate_n(self, n, x_partial, imgs, time_dim=1):
+    def propagate_n(self, n, x_partial, imgs, h0=None, time_dim=1):
         '''
         Given x_partial, predict the future controls/states for the next n time steps
 
@@ -509,8 +627,14 @@ class STLCNNPolicy(torch.nn.Module):
             x_next is [bs, n, state_dim] --- sequence of states over the next n time steps
             u_next is [bs, n, ctrl_dim] --- sequence of controls over the next n time steps
         '''
-
-        h0 = self.initial_rnn_state(imgs)
+        if h0 is None:
+            h0_ = self.initial_rnn_state(imgs)
+            if (imgs.shape[0] == 1) & (x_partial.shape[0] > 1):
+                bs = x_partial.shape[0]
+                h0 = (h0_[0].repeat(1, bs, 1), h0_[1].repeat(1, bs, 1))
+            else:
+                h0 = h0_
+        
 
         x_future = []
         u_future = []
@@ -520,7 +644,7 @@ class STLCNNPolicy(torch.nn.Module):
         x_prev = x_partial[:,-1:,:]    # [bs, 1, state_dim]
 
         for i in range(n):
-            u_ = self.proj(o)    # [bs, 1, ctrl_dim]
+            u_ = self.proj(o[:,-1:,:])    # [bs, 1, ctrl_dim]
             # [-1, 1] -> [a, b] : (b - a)/2 * u + (a + b) / 2
             a_min, a_max = self.a_lim.split(1, dim=-1)
             delta_min, delta_max = self.delta_lim.split(1, dim=-1)
@@ -599,10 +723,11 @@ class STLCNNPolicy(torch.nn.Module):
     def STL_loss(self, x, formula, formula_input, **kwargs):
         # penalize negative robustness values only
         robustness = self.STL_robustness(x, formula, formula_input, **kwargs)
-        violations = robustness[robustness < 0]
-        if len(violations) == 0:
-            return torch.relu(-robustness).mean()
-        return -violations.mean()
+        return self.leakyrelu(-robustness).mean()
+        # violations = robustness[robustness < 0]
+        # if len(violations) == 0:
+        #     return torch.relu(-robustness).mean()
+        # return -violations.mean()
 
     def adversarial_STL_loss(self, x, formula, formula_input, **kwargs):
         # minimize mean robustness
