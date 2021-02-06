@@ -21,7 +21,7 @@ import numpy as np
 import torch
 import scipy.io as sio
 
-from torch_interpolations.torch_interpolations.multilinear import RegularGridInterpolator
+# from torch_interpolations.torch_interpolations.multilinear import RegularGridInterpolator
 from torch.utils.tensorboard import SummaryWriter
 
 from environment import *
@@ -46,11 +46,11 @@ def prepare_data(npy_file, batch_dim=0):
     This also outputs the mean and std of the data [1, 1, state+ctrl_dim]
     '''
     data = np.load(npy_file)[:,1:]
-    μ = torch.tensor(np.mean(data, axis=0, keepdims=True)).float().unsqueeze(batch_dim).requires_grad_(False)
-    σ = torch.tensor(np.std(data, axis=0, keepdims=True)).float().unsqueeze(batch_dim).requires_grad_(False)
+    mu = torch.tensor(np.mean(data, axis=0, keepdims=True)).float().unsqueeze(batch_dim).requires_grad_(False)
+    sigma = torch.tensor(np.std(data, axis=0, keepdims=True)).float().unsqueeze(batch_dim).requires_grad_(False)
     x = torch.tensor(data[:, :4]).float().unsqueeze(batch_dim).requires_grad_(False)
     u = torch.tensor(data[:, 4:6]).float().unsqueeze(batch_dim).requires_grad_(False)
-    return x, u, [μ, σ]
+    return x, u, [mu, sigma]
 
 
 def prepare_data_img(filedir, batch_dim=0, height=480, width=480):
@@ -65,7 +65,7 @@ def prepare_data_img(filedir, batch_dim=0, height=480, width=480):
 
     for (j,fi) in enumerate(sorted(glob.glob(filedir+'*'))):
         fi_split = fi.split('_')
-        i = fi_split[2]
+        i = fi_split[-2]
 
         imgs[j,:,:,:] = convert_env_img_to_tensor(os.path.join(pardir, "figs/environments/%.1f"%float(i)))
         data_j = torch.tensor(np.load(fi)[:,1:]).float()
@@ -76,10 +76,10 @@ def prepare_data_img(filedir, batch_dim=0, height=480, width=480):
         tls[j] = traj_length
         centers[j] = float(i)
 
-    μ = torch.cat(data_list, dim=0).mean(0).unsqueeze(0).unsqueeze(0)
-    σ = torch.cat(data_list, dim=0).std(0).unsqueeze(0).unsqueeze(0)
+    mu = torch.cat(data_list, dim=0).mean(0).unsqueeze(0).unsqueeze(0)
+    sigma = torch.cat(data_list, dim=0).std(0).unsqueeze(0).unsqueeze(0)
 
-    return data[:,:,:4], data[:,:,4:6], tls, imgs, [μ, σ], centers
+    return data[:,:,:4], data[:,:,4:6], tls, imgs, [mu, sigma], centers
 
 def convert_env_img_to_tensor(img_path, grey=torchvision.transforms.Grayscale(), resize=torchvision.transforms.Resize([480, 480])):
     image_tensor = torch.stack([TF.to_tensor(resize(grey(Image.open(img_path + '/init.png')))),
@@ -99,6 +99,7 @@ def generate_img_tensor(env, width=480, height=480, dpi=500, xlim=[-5,15], ylim=
     fig = Figure(figsize=figsize, dpi=dpi)
     canvas = FigureCanvas(fig)
     ax = fig.subplots()
+    fig.subplots_adjust(0,0,1,1)
     _, ax = env.initial.draw2D(ax=ax, **plt_params)
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
@@ -109,6 +110,7 @@ def generate_img_tensor(env, width=480, height=480, dpi=500, xlim=[-5,15], ylim=
     fig = Figure(figsize=figsize, dpi=dpi)
     canvas = FigureCanvas(fig)
     ax = fig.subplots()
+    fig.subplots_adjust(0,0,1,1)
     _, ax = env.final.draw2D( ax=ax, **plt_params)
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
@@ -119,6 +121,7 @@ def generate_img_tensor(env, width=480, height=480, dpi=500, xlim=[-5,15], ylim=
     fig = Figure(figsize=figsize, dpi=dpi)
     canvas = FigureCanvas(fig)
     ax = fig.subplots()
+    fig.subplots_adjust(0,0,1,1)
     for covs in env.covers:
         _, ax = covs.draw2D( ax=ax, **plt_params)
     ax.set_xlim(xlim)
@@ -130,6 +133,7 @@ def generate_img_tensor(env, width=480, height=480, dpi=500, xlim=[-5,15], ylim=
     fig = Figure(figsize=figsize, dpi=dpi)
     canvas = FigureCanvas(fig)
     ax = fig.subplots()
+    fig.subplots_adjust(0,0,1,1)
     for obs in env.obs:
         _, ax = obs.draw2D( ax=ax, **plt_params)
     ax.set_xlim(xlim)
@@ -142,18 +146,152 @@ def generate_img_tensor(env, width=480, height=480, dpi=500, xlim=[-5,15], ylim=
 
 
 
+def sample_environment_parameters(case, n):
+    if case == "coverage":
+        return np.round(1+np.random.rand(n) * 9, 2)    # between 1-10, and two decimal place
+    elif case == "drive":
+        return np.concatenate([generate_random_drive_parameters() for i in range(n)], axis=0)
+    else:
+        raise Exception("Case %s does not exist"%case)
 
-def generate_img_tensor_parameter(cover_x, width=480, height=480, dpi=500, xlim=[-5,15], ylim=[-5,15]):
-    final_x = 5.0
-    obs_x = (cover_x + final_x) / 2
-    params = { "covers": [Circle([cover_x, 3.5], 2.0)],
-       "obstacles": [Circle([obs_x, 9.], 1.5)],
-       "initial": Box([2, -4.],[8, -2]),
-       "final": Circle([final_x, 13], 1.0)
-    } 
-    env = Environment(params)
 
+
+def update_environment(case, env, p, ic_bs, carlength=1.2):
+    if case == "coverage":
+        centers = p
+        if isinstance(centers, np.ndarray):
+            final_x = env.final.center[0]
+            obs_x = (centers + final_x) / 2
+            env.covers[0].center = torch.tensor(np.stack([centers, 3.5 * np.ones_like(centers)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+            env.obs[0].center = torch.tensor(np.stack([obs_x, 9. * np.ones_like(obs_x)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+        else:
+            final_x = env.final.center[0]
+            obs_x = (centers + final_x) / 2
+            env.covers[0].center = [centers, 3.5 ]
+            env.obs[0].center = [obs_x, 9. ]
+
+        return centers
+    elif case == "drive":
+        obs = p
+        if len(obs.shape) > 1:
+            env.obs[2].lower = torch.tensor(np.stack([np.ones_like(obs[:,0]) * 5.2, obs[:,0]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+            env.obs[2].upper = torch.tensor(np.stack([np.ones_like(obs[:,0]) * 5.8, (obs[:,0] + carlength)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+
+            env.obs[3].lower = torch.tensor(np.stack([np.ones_like(obs[:,1]) * 6.2, obs[:,1]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+            env.obs[3].upper = torch.tensor(np.stack([np.ones_like(obs[:,1]) * 6.8, (obs[:,1] + carlength)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+        else:
+            env.obs[2].lower = [5.2, obs[0]]
+            env.obs[2].upper = [5.8, obs[0] + carlength]
+
+            env.obs[3].lower = [6.2, obs[1]]
+            env.obs[3].upper = [6.8, obs[1] + carlength]
+        return obs
+    else:
+        raise Exception("Case %s does not exist"%case)
+
+
+def append_environment(case, env, p, ic_bs, carlength=1.2):
+    if case == "coverage":
+        centers = p
+        final_x = env.final.center[0]
+        obs_x = (centers + final_x) / 2
+        env.covers[0].center = torch.cat([env.covers[0].center, torch.tensor(np.stack([centers, 3.5 * np.ones_like(centers)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
+        env.obs[0].center = torch.cat([env.obs[0].center, torch.tensor(np.stack([obs_x, 9. * np.ones_like(obs_x)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
+        return centers
+    elif case == "drive":
+        obs = p
+        env.obs[2].lower = torch.cat([env.obs[2].lower, torch.tensor(np.stack([np.ones_like(obs[:,0]) * 5.2, obs[:,0]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
+        env.obs[2].upper = torch.cat([env.obs[2].upper, torch.tensor(np.stack([np.ones_like(obs[:,0]) * 5.8, (obs[:,0] + carlength)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
+
+        env.obs[3].lower = torch.cat([env.obs[3].lower, torch.tensor(np.stack([np.ones_like(obs[:,1]) * 6.2, obs[:,1]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
+        env.obs[3].upper = torch.cat([env.obs[3].upper, torch.tensor(np.stack([np.ones_like(obs[:,1]) * 6.8, (obs[:,1] + carlength)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
+        return obs
+    else:
+        raise Exception("Case %s does not exist"%case)
+
+
+
+def sample_and_update_environment(case, env, img_bs, ic_bs, carlength=1.2):
+    p = sample_environment_parameters(case, img_bs)
+    return update_environment(case, env, p, ic_bs, carlength=carlength)
+
+
+
+# def generate_img_tensor_parameter(cover_x, width=480, height=480, dpi=500, xlim=[-5,15], ylim=[-5,15]):
+#     final_x = 5.0
+#     obs_x = (cover_x + final_x) / 2
+#     params = { "covers": [Circle([cover_x, 3.5], 2.0)],
+#        "obstacles": [Circle([obs_x, 9.], 1.5)],
+#        "initial": Box([2, -4.],[8, -2]),
+#        "final": Circle([final_x, 13], 1.0)
+#     } 
+#     env = Environment(params)
+
+#     return generate_img_tensor(env, width=width, height=height, dpi=dpi, xlim=xlim, ylim=ylim)
+
+# def generate_img_drive_tensor_parameter(p, carlength=1.2, width=480, height=480, dpi=500, xlim=[0,12], ylim=[0,12]):
+#     env = generate_drive_env_parameters(p, carlength=carlength)
+#     return generate_img_tensor(env, width=width, height=height, dpi=dpi, xlim=xlim, ylim=ylim)
+
+def generate_img_tensor_from_parameter(case, p, carlength=1.2, width=480, height=480, dpi=500):
+    env = generate_env_from_parameters(case, p, carlength=carlength)
+    if case == "coverage":
+        xlim = [-5, 15]
+        ylim = [-5, 15]
+    elif case == "drive":
+        xlim = [0, 12]
+        ylim = [0, 12]
     return generate_img_tensor(env, width=width, height=height, dpi=dpi, xlim=xlim, ylim=ylim)
+
+
+def generate_random_drive_parameters(carlength=1.2):
+    left1 = np.random.rand() * 6 + 2
+    right2 = np.random.rand() * 6 + 2
+    right3 = np.random.rand(1) * 3 + 5
+    while True:
+        left3 = np.random.rand(1) * 10 + 1
+        if np.abs(right3 - left3) > (carlength + 2):
+            break
+    return np.array([[left1, -10],[-10, right2],[left3.item(), right3.item()]])
+
+
+def generate_env_from_parameters(case, p, carlength=1.2):
+    if case == "coverage":
+        final_x = 5.0
+        obs_x = (p + final_x) / 2
+        params = { "covers": [Circle([p, 3.5], 2.0)],
+           "obstacles": [Circle([obs_x, 9.], 1.5)],
+           "initial": Box([2, -4.],[8, -2]),
+           "final": Circle([final_x, 13], 1.0)
+        } 
+        return Environment(params)
+
+    elif case == "drive":
+        if p[0] == -10:
+            car = [Box([5.2, -10], [5.8, -10 + carlength]), Box([6.2, p[1]], [6.8, p[1] + carlength])]
+        elif p[1] == -10:
+            car = [Box([5.2, p[0]], [5.8, p[0] + carlength]), Box([6.2, -10], [6.8, -10 + carlength])]
+        else:
+            car = [Box([5.2, p[0]], [5.8, p[0] + carlength]), Box([6.2, p[1]], [6.8, p[1] + carlength])]
+            
+        params = { "covers": [],
+                   "obstacles": [Box([0,0], [5, 12]), Box([7,0], [12, 12])] + car,
+                   "initial": Box([6.2, 1.0],[6.8, 2.0]),
+                   "final": Box([6.2, 10.0],[6.8, 12.0])
+                } 
+        return Environment(params)
+
+def update_drive_env_parameters(env, p, carlength=1.2):  
+    if np.isnan(p[0]):
+        car = [Box([6.2, p[1]], [6.8, p[1] + carlength])]
+    elif np.isnan(p[1]):
+        car = [Box([5.2, p[0]], [5.8, p[0] + carlength])]
+    else:
+        car = [Box([5.2, p[0]], [5.8, p[0] + carlength]), Box([6.2, p[0]], [6.8, p[0] + carlength])]
+        
+    env.obs = [Box([0,0], [5, 12]), Box([7,0], [12, 12])] + car
+
+
 
 
 # class ExpertTrajImageDataset(torch.utils.data.Dataset):
@@ -409,7 +547,7 @@ class STLPolicy(torch.nn.Module):
         Inputs:
             x_true is [bs, time_dim, state_dim] --- input state trajectory (from expert demonstration)
             u_true is [bs, time_dim, ctrl_dim] --- input control trajectory (from expert demonstration)
-            teacher_training ∈ [0,1] --- a probability of using the previous propagated state as opposed to the true state from x_true
+            teacher_training in [0,1] --- a probability of using the previous propagated state as opposed to the true state from x_true
                                          a run time, teacher_training=1.0 since we do not have access to the ground truth
             time_dim --- dimension of time. Default=1
 
@@ -530,12 +668,12 @@ class STLCNNPolicy(torch.nn.Module):
 
         self.lstm = torch.nn.LSTM(self.state_dim, hidden_dim, num_layers, dropout=dropout, batch_first=True)
         self.proj = torch.nn.Sequential(torch.nn.Linear(hidden_dim, dynamics.ctrl_dim), torch.nn.Tanh())
-        self.initialize_rnn_h = torch.nn.Sequential(torch.nn.Linear(8 * 8, hidden_dim),
+        self.initialize_rnn_h = torch.nn.Sequential(torch.nn.Linear(8 * 8 + self.state_dim, hidden_dim),
                                                     torch.nn.Tanh(),
                                                     torch.nn.Linear(hidden_dim, hidden_dim),
                                                     torch.nn.Tanh(),
                                                     torch.nn.Linear(hidden_dim, hidden_dim))
-        self.initialize_rnn_c = torch.nn.Sequential(torch.nn.Linear(8 * 8, hidden_dim),
+        self.initialize_rnn_c = torch.nn.Sequential(torch.nn.Linear(8 * 8 + self.state_dim, hidden_dim),
                                                     torch.nn.Tanh(),
                                                     torch.nn.Linear(hidden_dim, hidden_dim),
                                                     torch.nn.Tanh(),
@@ -569,10 +707,19 @@ class STLCNNPolicy(torch.nn.Module):
         sigma = self.stats[1][:,:,self.state_dim:]
         return u * sigma + mu
 
-    def initial_rnn_state(self, imgs):
-        # x0 is [bs, state_dim]
-        y = self.cnn(imgs)
-        y0 = y.view(*y.shape[:2], -1).permute([1,0,2])
+    def update_env(self, center_x):
+        final_x = self.env.final.center[0]
+        obs_x = (center_x + final_x) / 2
+        self.env.covers[0].center = [center_x, 3.5]
+        self.env.obs[0].center = [obs_x, 9.0]
+
+    def initial_rnn_state(self, imgs, x0):
+        # x0 is [bs, 1, state_dim]
+        y = self.cnn(imgs)    # [bs, 1, 8 8]
+        if (imgs.shape[0] == 1) & (x0.shape[0] > 1):
+            bs = x0.shape[0]
+            y = y.repeat(bs, 1, 1, 1)
+        y0 = torch.cat([y.view(*y.shape[:2], -1), x0], dim=-1).permute([1,0,2])
         return self.initialize_rnn_h(y0), self.initialize_rnn_c(y0)
 
     def forward(self, x0, imgs, h0=None):
@@ -588,12 +735,12 @@ class STLCNNPolicy(torch.nn.Module):
             x_next is [bs, time_dim, state_dim] --- propagate dynamics from previous state and computed controls
         '''
         if h0 is None:
-            h0_ = self.initial_rnn_state(imgs)
-            if (imgs.shape[0] == 1) & (x0.shape[0] > 1):
-                bs = x0.shape[0]
-                h0 = (h0_[0].repeat(1, bs, 1), h0_[1].repeat(1, bs, 1))
-            else:
-                h0 = h0_
+            h0 = self.initial_rnn_state(imgs, x0)
+            # if (imgs.shape[0] == 1) & (x0.shape[0] > 1):
+            #     bs = x0.shape[0]
+            #     h0 = (h0_[0].repeat(1, bs, 1), h0_[1].repeat(1, bs, 1))
+            # else:
+            #     h0 = h0_
 
         o, h0 = self.lstm(x0, h0)    # [bs, time_dim, hidden_dim] , bs = 1 for a single expert trajectory.
 
@@ -628,7 +775,7 @@ class STLCNNPolicy(torch.nn.Module):
             u_next is [bs, n, ctrl_dim] --- sequence of controls over the next n time steps
         '''
         if h0 is None:
-            h0_ = self.initial_rnn_state(imgs)
+            h0_ = self.initial_rnn_state(imgs, x_partial)
             if (imgs.shape[0] == 1) & (x_partial.shape[0] > 1):
                 bs = x_partial.shape[0]
                 h0 = (h0_[0].repeat(1, bs, 1), h0_[1].repeat(1, bs, 1))
@@ -638,10 +785,10 @@ class STLCNNPolicy(torch.nn.Module):
 
         x_future = []
         u_future = []
-
-        o, h = self.lstm(x_partial, h0)    # h is the last hidden state/last output
-        # get last state, as that is the input to compute the first step of the n steps
         x_prev = x_partial[:,-1:,:]    # [bs, 1, state_dim]
+        o, h = self.lstm(x_prev, h0)    # h is the last hidden state/last output
+        # get last state, as that is the input to compute the first step of the n steps
+        
 
         for i in range(n):
             u_ = self.proj(o[:,-1:,:])    # [bs, 1, ctrl_dim]
@@ -669,7 +816,7 @@ class STLCNNPolicy(torch.nn.Module):
         Inputs:
             x_true is [bs, time_dim, state_dim] --- input state trajectory (from expert demonstration)
             u_true is [bs, time_dim, ctrl_dim] --- input control trajectory (from expert demonstration)
-            teacher_training ∈ [0,1] --- a probability of using the previous propagated state as opposed to the true state from x_true
+            teacher_training in [0,1] --- a probability of using the previous propagated state as opposed to the true state from x_true
                                          a run time, teacher_training=1.0 since we do not have access to the ground truth
             time_dim --- dimension of time. Default=1
 

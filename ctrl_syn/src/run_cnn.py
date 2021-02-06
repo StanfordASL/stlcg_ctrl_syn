@@ -166,8 +166,8 @@ c = 6
 if args.teacher_training >= 0.0:
     teacher_training = lambda ep: args.teacher_training
 else:
-    teacher_training = lambda ep: sigmoidal_anneal(ep, 0.1, 0.9, b, c)
-    write_log(log_dir, "Teacher training: min={} max={} b={} c={}".format(0.1, 0.9, b, c))
+    teacher_training = lambda ep: sigmoidal_anneal(ep, 0.1, 1.0, b, c)
+    write_log(log_dir, "Teacher training: min={} max={} b={} c={}".format(0.1, 1.0, b, c))
 
 
 if args.weight_stl >= 0.0:
@@ -231,7 +231,7 @@ upper = torch.tensor([env.initial.upper[0], env.initial.upper[1], 3*np.pi/4, 2])
 
 in_end_goal = inside_circle(env.final, "distance to final")
 stop_in_end_goal = in_end_goal & (stlcg.Expression('speed')  < 0.5)
-end_goal = stlcg.Eventually(subformula=stlcg.Always(subformula=stop_in_end_goal, interval=[0,4]))
+end_goal = stlcg.Eventually(subformula=stlcg.Always(subformula=stop_in_end_goal))
 
 in_coverage = inside_circle(env.covers[0], "distance to coverage") & (stlcg.Expression('speed')  < 2.0)
 coverage = stlcg.Eventually(subformula=stlcg.Always(in_coverage, interval=[0,8]))
@@ -252,7 +252,7 @@ model = STLCNNPolicy(dynamics,
                   stats,
                   env).to(device)
 model.switch_device(device)
-
+case = "coverage"
 
 if args.mode == "test":
 
@@ -292,12 +292,13 @@ if args.mode == "test":
                       img_bs=4,
                       expert_mini_bs=args.expert_mini_bs)
 
-    train_cnn(model=model,
+    train_cnn(case=case,
+              model=model,
               train_traj=(x_train, u_train),
               eval_traj=(x_eval, u_eval),
               imgs=(imgs_train, imgs_eval),
               tls=(tls_train, tls_eval),
-              centers=(centers_train, centers_eval),
+              env_param=(centers_train, centers_eval),
               formula=formula,
               formula_input_func=formula_input_func,
               train_loader=ic_trainloader,
@@ -312,17 +313,19 @@ if args.mode == "test":
               status="new"
               )
     print("train_cnn code completed. Onto adversarial_rejacc_cnn code...")
-    ic_adv_, img_p_adv = adversarial_rejacc_cnn(model=model,
-                                               T=x_train.shape[1]+4,
-                                               formula=formula,
-                                               formula_input_func=formula_input_func,
-                                               device=device,
-                                               hps=hps,
-                                               save_model_path="../models/test",
-                                               number=0,
-                                               lower=lower,
-                                               upper=upper,
-                                               adv_n_samples=128)
+    ic_adv_, img_p_adv = adversarial_rejacc_cnn(case=case,
+                                                model=model,
+                                                T=x_train.shape[1]+4,
+                                                formula=formula,
+                                                formula_input_func=formula_input_func,
+                                                device=device,
+                                                writer=None,
+                                                hps=hps,
+                                                save_model_path="../models/test",
+                                                number=0,
+                                                lower=lower,
+                                                upper=upper,
+                                                adv_n_samples=128)
     n_adv = img_p_adv.shape[0]
     random_n = torch.randperm(n_adv)[:n_train]
     ic_adv_ = ic_adv_[random_n]
@@ -344,12 +347,13 @@ if args.mode == "test":
     ic_evalloader = torch.utils.data.DataLoader(ic_eval, batch_size=n_eval, shuffle=False)
 
 
-    train_cnn(model=model,
+    train_cnn(case=case,
+              model=model,
               train_traj=(x_train, u_train),
               eval_traj=(x_eval, u_eval),
               imgs=(imgs_train, imgs_eval),
               tls=(tls_train, tls_eval),
-              centers=(centers_train, centers_eval),
+              env_param=(centers_train, centers_eval),
               formula=formula,
               formula_input_func=formula_input_func,
               train_loader=ic_trainloader,
@@ -390,7 +394,8 @@ elif args.mode == "train":
     ic_trainloader = torch.utils.data.DataLoader(ic_train, batch_size=args.trainset_size//8, shuffle=True)
     ic_evalloader = torch.utils.data.DataLoader(ic_eval, batch_size=args.evalset_size, shuffle=False)
 
-    train_cnn(model=model,
+    train_cnn(case=case,
+              model=model,
               train_traj=(x_train, u_train),
               eval_traj=(x_eval, u_eval),
               imgs=(imgs_train, imgs_eval),
@@ -590,7 +595,7 @@ elif args.mode == "adv_training_iteration_rapid":
     #               status=args.status
     #               )
 
-    write_log(log_dir, "First training phase done:")
+    # write_log(log_dir, "First training phase done:")
 
     hps = hyperparameters(weight_decay=0.05,
               learning_rate=0.1,
@@ -604,8 +609,8 @@ elif args.mode == "adv_training_iteration_rapid":
               img_bs=4,
               expert_mini_bs=args.expert_mini_bs)
 
-    mini_iter_max = 5
-    for rep in range(3):
+    mini_iter_max = 20
+    for rep in range(10, 20):
 
         train_cnn(model=model,
                   train_traj=(x_train, u_train),
@@ -623,7 +628,7 @@ elif args.mode == "adv_training_iteration_rapid":
                   hps=hps,
                   save_model_path=model_dir,
                   number=rep+1,
-                  iter_max=args.iter_max * args.number + mini_iter_max * (rep + 1),
+                  iter_max=args.iter_max * (args.number + 1) + mini_iter_max * (rep + 1),
                   status="continue"
                   )
 

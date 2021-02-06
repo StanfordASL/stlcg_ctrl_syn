@@ -195,7 +195,7 @@ def adversarial_rejacc(model, T, formula, formula_input_func, device, hps, save_
 
 
 # rejection-acceptance sampling
-def adversarial_rejacc_cnn(model, T, formula, formula_input_func, device, writer, hps, save_model_path, number, lower, upper, adv_n_samples=512):
+def adversarial_rejacc_cnn(case, model, T, formula, formula_input_func, device, writer, hps, save_model_path, number, lower, upper, adv_n_samples=512, xlim=[-5,15], ylim=[-5,15]):
     log_dir = save_model_path.replace("models", "logs", 1)
     fig_dir = save_model_path.replace("models", "figs", 1)
 
@@ -210,30 +210,25 @@ def adversarial_rejacc_cnn(model, T, formula, formula_input_func, device, writer
     img_bs = hps.img_bs
     
     adv_ic = []
-    adv_centers = []
+    adv_env_param = []
     n_adv = 0
     iter_count = 1
     max_iter = 20
+    carlength = 1.2
 
     mini_bs = adv_n_samples // 4
     while n_adv < adv_n_samples:
+
 
         x0_ = initial_conditions(mini_bs, lower, upper).to(device).float()
         x0 = model.standardize_x(x0_)
 
         # with ICs, propagate the trajectories
         xdim = x0.shape[-1]
-        
-        centers_ic = np.round(1+np.random.rand(img_bs) * 9, 2)    # between 1-10, and one decimal place
-        # GROSS -- hard coding some parameters here :/ 
-        final_x = model.env.final.center[0]
-        obs_x = (centers_ic + final_x) / 2
-        model.env.covers[0].center = torch.tensor(np.stack([centers_ic, 3.5 * np.ones_like(centers_ic)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, mini_bs, 1, 1]).view([-1, 1, 2])
-        model.env.obs[0].center = torch.tensor(np.stack([obs_x, 9. * np.ones_like(obs_x)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, mini_bs, 1, 1]).view([-1, 1, 2])
+        ps = sample_and_update_environment(case, model.env, img_bs, mini_bs, carlength=carlength)
 
-        # ic_imgs = torch.cat([convert_env_img_to_tensor(os.path.join(pardir, "figs/environments/%.1f"%cb)) for cb in centers_ic], dim=0).to(device)
-        ic_imgs = torch.stack([generate_img_tensor_parameter(ci) for ci in centers_ic]).to(device)
 
+        ic_imgs = torch.stack([generate_img_tensor_from_parameter(case, pi) for pi in ps]).to(device)
         ic_batch = x0[None,...].repeat([img_bs,1,1,1]).view(-1, 1, xdim)
         img_batch = ic_imgs.unsqueeze(1).repeat([1, mini_bs, 1, 1, 1]).view([-1, *ic_imgs.shape[-3:]])
 
@@ -243,10 +238,11 @@ def adversarial_rejacc_cnn(model, T, formula, formula_input_func, device, writer
         rho = model.STL_robustness(complete_traj, formula, formula_input_func, scale=-1).squeeze()
 
         violating_idx = (rho <= 0)
-        centers_batch = torch.tensor(centers_ic).unsqueeze(1).repeat([1, mini_bs]).view(-1).float()
+        ps_batch = torch.tensor(ps).float().unsqueeze(1).repeat(*[1]*len(ps.shape), mini_bs).view(-1, *[2]*(len(ps.shape)-1))
+
         if violating_idx.sum() > 0.0:
             adv_ic.append(ic_batch[violating_idx])
-            adv_centers.append(centers_batch[violating_idx])
+            adv_env_param.append(ps_batch[violating_idx])
             n_adv += violating_idx.sum()
 
         iter_count += 1
@@ -258,61 +254,45 @@ def adversarial_rejacc_cnn(model, T, formula, formula_input_func, device, writer
     if n_adv == 0:
         return None, None
 
+
     adv_ic = torch.cat(adv_ic, dim=0)
-    adv_centers = torch.cat(adv_centers, dim=0)
-
-    unique_centers, unique_idx = torch.unique(adv_centers, return_inverse=True, sorted=True) # unique centers, and associated idx
-
-    N_subplots = min(unique_centers.shape[0], 10)
-
-    rand_idx = torch.randperm(unique_centers.shape[0])[:N_subplots] # choose 10 random unique indices
+    adv_env_param = torch.cat(adv_env_param, dim=0)
+    unique_env_params, unique_idx = torch.unique(adv_env_param, return_inverse=True, sorted=True, dim=0) # unique centers, and associated idx
+    N_subplots = min(unique_env_params.shape[0], 4)
+    rand_idx = torch.randperm(unique_env_params.shape[0])[:N_subplots] # choose 10 random unique indices
     relevant_idx = sum(unique_idx == ri for ri in rand_idx) == 1 # get relevant indices for the selected 10 unique numbers
-    centers_ic = adv_centers[relevant_idx]
+    unique_adv_env_param = adv_env_param[relevant_idx]
     x0 = adv_ic[relevant_idx]
     xdim = x0.shape[-1]
     unique_idx0 = unique_idx[relevant_idx] # get relevent indices
     values, indices = torch.sort(rand_idx)
 
-
-    # GROSS -- hard coding some parameters here :/ 
-    final_x = model.env.final.center[0]
-    obs_x = (centers_ic + final_x) / 2
-    model.env.covers[0].center = torch.stack([centers_ic, 3.5 * torch.ones_like(centers_ic)], axis=1)
-    model.env.obs[0].center = torch.stack([obs_x, 9. * torch.ones_like(obs_x)], axis=1)
-    # # ic_imgs = torch.cat([convert_env_img_to_tensor(os.path.join(pardir, "figs/environments/%.1f"%cb)) for cb in centers_ic], dim=0).to(device)
-    ic_imgs = torch.stack([generate_img_tensor_parameter(ci) for ci in centers_ic]).to(device)
-
-
+    ic_imgs = torch.stack([generate_img_tensor_from_parameter(case, ci) for ci in unique_adv_env_param]).to(device)
     x_future, u_future = model.propagate_n(T, x0, ic_imgs)
     complete_traj = model.join_partial_future_signal(x0, x_future)      # [bs, time_dim, x_dim]
-
     traj_np = model.unstandardize_x(complete_traj).cpu().detach()
-
-    # trajectory plot
-    cover_center_list = model.env.covers[0].center
-    obs_center_list = model.env.obs[0].center
 
     fig1, ax1s = plt.subplots(2, 5, figsize=(25,10))
 
     for i in range(N_subplots):
-        env_tmp.covers[0].center = list(cover_center_list[values[indices[i]] == unique_idx0][0].numpy())
-        env_tmp.obs[0].center = list(obs_center_list[values[indices[i]] == unique_idx0][0].numpy())
+        p = unique_env_params[values[indices[i]]]
+        update_environment(case, env_tmp, p, 1, carlength=carlength)
         j = indices[i]
         ax = ax1s[j//5, j % 5]
         ax.grid(zorder=0)
         _, ax = env_tmp.draw2D(ax=ax, kwargs=draw_params)
         ax.axis("equal")
-        ax.set_title("%i: cover_x = %.1f"%(i+1, env_tmp.covers[0].center[0]))
+    #     ax.set_title("%i: cover_x = %.1f"%(i+1, env_tmp.covers[0].center[0]))
         ax.plot(traj_np[values[indices[i]] == unique_idx0,:,0].T, traj_np[values[indices[i]] == unique_idx0,:,1].T, alpha=0.4, c='IndianRed', zorder=5)
         ax.scatter(traj_np[values[indices[i]] == unique_idx0,:,0].T, traj_np[values[indices[i]] == unique_idx0,:,1].T, alpha=0.4, c='IndianRed', zorder=5, marker="x")
-        ax.set_xlim([-5, 15])
-        ax.set_ylim([-5, 15])
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
 
 
     fig1.savefig(fig_dir + '/adversarial/traj_number={:02d}.png'.format(number))
 
-
-    writer.add_figure('adversarial/trajectory', fig1, number)
+    if writer is not None:
+        writer.add_figure('adversarial/trajectory', fig1, number)
     plt.close(fig1)
 
-    return adv_ic, adv_centers
+    return adv_ic, adv_env_param
