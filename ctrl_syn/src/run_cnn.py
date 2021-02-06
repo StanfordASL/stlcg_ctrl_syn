@@ -400,7 +400,7 @@ elif args.mode == "train":
               eval_traj=(x_eval, u_eval),
               imgs=(imgs_train, imgs_eval),
               tls=(tls_train, tls_eval),
-              centers=(centers_train, centers_eval),
+              env_param=(centers_train, centers_eval),
               formula=formula,
               formula_input_func=formula_input_func,
               train_loader=ic_trainloader,
@@ -429,7 +429,8 @@ elif args.mode == 'eval':
 elif args.mode == "adversarial":
     # adv_ic is [bs, 1, x_dim], cpu in unstandardized form
 
-    adv_ic = adversarial(model=model,
+    adv_ic = adversarial(case=case,
+                         model=model,
                          T=x_train.shape[1]+4,
                          formula=formula,
                          formula_input_func=formula_input_func,
@@ -480,12 +481,13 @@ elif args.mode == "adv_training_iteration":
         start_idx = args.number
     for rep in range(start_idx, start_idx + 3):
 
-        train_cnn(model=model,
+        train_cnn(case=case,
+                  model=model,
                   train_traj=(x_train, u_train),
                   eval_traj=(x_eval, u_eval),
                   imgs=(imgs_train, imgs_eval),
                   tls=(tls_train, tls_eval),
-                  centers=(centers_train, centers_eval),
+                  env_param=(centers_train, centers_eval),
                   formula=formula,
                   formula_input_func=formula_input_func,
                   train_loader=ic_trainloader,
@@ -502,7 +504,8 @@ elif args.mode == "adv_training_iteration":
 
         write_log(log_dir, "Training: {} training phase(s) done".format(rep+1))
 
-        ic_adv_, img_p_adv = adversarial_rejacc_cnn(model=model,
+        ic_adv_, img_p_adv = adversarial_rejacc_cnn(case=case,
+                                                    model=model,
                                                     T=x_train.shape[1]+4,
                                                     formula=formula,
                                                     formula_input_func=formula_input_func,
@@ -574,28 +577,29 @@ elif args.mode == "adv_training_iteration_rapid":
 
     writer = SummaryWriter(log_dir=runs_dir)
 
-    # # do complete training round to get a decent solution
-    # train_cnn(model=model,
-    #               train_traj=(x_train, u_train),
-    #               eval_traj=(x_eval, u_eval),
-    #               imgs=(imgs_train, imgs_eval),
-    #               tls=(tls_train, tls_eval),
-    #               centers=(centers_train, centers_eval),
-    #               formula=formula,
-    #               formula_input_func=formula_input_func,
-    #               train_loader=ic_trainloader,
-    #               eval_loader=ic_evalloader,
-    #               device=device,
-    #               tqdm=tqdm.tqdm,
-    #               writer=writer,
-    #               hps=hps,
-    #               save_model_path=model_dir,
-    #               number=0,
-    #               iter_max=args.iter_max,
-    #               status=args.status
-    #               )
+    # do complete training round to get a decent solution
+    train_cnn(case=case,
+              model=model,
+              train_traj=(x_train, u_train),
+              eval_traj=(x_eval, u_eval),
+              imgs=(imgs_train, imgs_eval),
+              tls=(tls_train, tls_eval),
+              env_param=(centers_train, centers_eval),
+              formula=formula,
+              formula_input_func=formula_input_func,
+              train_loader=ic_trainloader,
+              eval_loader=ic_evalloader,
+              device=device,
+              tqdm=tqdm.tqdm,
+              writer=writer,
+              hps=hps,
+              save_model_path=model_dir,
+              number=0,
+              iter_max=args.iter_max,
+              status=args.status
+              )
 
-    # write_log(log_dir, "First training phase done:")
+    write_log(log_dir, "First training phase done:")
 
     hps = hyperparameters(weight_decay=0.05,
               learning_rate=0.1,
@@ -610,14 +614,15 @@ elif args.mode == "adv_training_iteration_rapid":
               expert_mini_bs=args.expert_mini_bs)
 
     mini_iter_max = 20
-    for rep in range(10, 20):
+    for rep in range(20):
 
-        train_cnn(model=model,
+        train_cnn(case=case,
+                  model=model,
                   train_traj=(x_train, u_train),
                   eval_traj=(x_eval, u_eval),
                   imgs=(imgs_train, imgs_eval),
                   tls=(tls_train, tls_eval),
-                  centers=(centers_train, centers_eval),
+                  env_param=(centers_train, centers_eval),
                   formula=formula,
                   formula_input_func=formula_input_func,
                   train_loader=ic_trainloader,
@@ -633,7 +638,8 @@ elif args.mode == "adv_training_iteration_rapid":
                   )
 
 
-        ic_adv_, img_p_adv = adversarial_rejacc_cnn(model=model,
+        ic_adv_, img_p_adv = adversarial_rejacc_cnn(case=case,
+                                                    model=model,
                                                     T=x_train.shape[1]+4,
                                                     formula=formula,
                                                     formula_input_func=formula_input_func,

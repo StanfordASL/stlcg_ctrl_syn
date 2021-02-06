@@ -241,18 +241,21 @@ def train_cnn(case, model, train_traj, eval_traj, imgs, tls, env_param, formula,
                 optimizer.step()
                 gradient_step += 1
 
-            torch.save({
-                        'train_iteration': train_iteration,
-                        'gradient_step': gradient_step,
-                        'eval_iteration': eval_iteration,
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'loss': loss,
-                        'ic': ic},
-                        save_model_path + "/model_{:02d}_iteration={:03d}".format(number, train_iteration))
+
 
             # plotting progress
             if (train_iteration % plot_freq) == 0:
+
+                torch.save({
+                            'train_iteration': train_iteration,
+                            'gradient_step': gradient_step,
+                            'eval_iteration': eval_iteration,
+                            'model_state_dict': model.state_dict(),
+                            'optimizer_state_dict': optimizer.state_dict(),
+                            'loss': loss,
+                            'ic': ic},
+                            save_model_path + "/model_{:02d}_iteration={:03d}".format(number, train_iteration))
+
                 # compute trajectories with fixed imgs
                 # with new ICs, propagate the trajectories
                 ic_bs = ic.shape[0]
