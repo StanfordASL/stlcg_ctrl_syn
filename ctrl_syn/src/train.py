@@ -280,7 +280,7 @@ def train_cnn(case, model, train_traj, eval_traj, imgs, tls, env_param, formula,
                     ax.grid(zorder=0)
                     _, ax = env_tmp.draw2D(ax=ax, kwargs=draw_params)
                     ax.axis("equal")
-                    ax.set_title("%i: cover_x = %.1f"%(i+1, env_tmp.covers[0].center[0]))
+                    # ax.set_title("%i: cover_x = %.1f"%(i+1, env_tmp.covers[0].center[0]))
                     ax.plot(traj_np[i,:,:,0].T, traj_np[i,:,:,1].T, alpha=0.4, c='RoyalBlue', zorder=5)
                     ax.scatter(traj_np[i,:,:,0].T, traj_np[i,:,:,1].T, alpha=0.4, c='RoyalBlue', zorder=5)
                     ax.set_xlim(xlim)

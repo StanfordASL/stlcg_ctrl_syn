@@ -159,6 +159,7 @@ hps_names = ['weight_decay',
              ]
 
 
+# setting up hyperparameters
 hyperparameters = namedtuple('hyperparameters', hps_names)
 
 b = 80 / (1000.0/args.iter_max)
@@ -202,57 +203,83 @@ hps = hyperparameters(weight_decay=0.05,
                       expert_mini_bs=args.expert_mini_bs)
 
 
+case = args.type
 
 # original data
+x_train_, u_train_, tls_train, imgs_train, stats, centers_train = prepare_data_img(case, "../expert/%s_cnn/train"%case)
+x_eval_, u_eval_, tls_eval, imgs_eval, stats, centers_eval = prepare_data_img(case, "../expert/%s_cnn/eval"%case)
 
-x_train_, u_train_, tls_train, imgs_train, stats, centers_train = prepare_data_img("../expert/coverage_cnn/train")
-x_eval_, u_eval_, tls_eval, imgs_eval, stats, centers_eval = prepare_data_img("../expert/coverage_cnn/eval")
-
-#  setting up environment
-# will be overridden later
-center_batch = np.round(1+np.random.rand(16) * 9, 1)
-final_x = 5.0
-obs_x = (center_batch + final_x) / 2
-
-params = { "covers": [Circle(np.expand_dims(np.stack([center_batch, 3.5 * np.ones_like(center_batch)], axis=1), 1), 2.0)],
-   "obstacles": [Circle(np.expand_dims(np.stack([obs_x, 9. * np.ones_like(obs_x)], axis=1), 1), 1.5)],
-   "initial": Box([2, -4.],[8, -2]),
-   "final": Circle([final_x, 13], 1.0)
-}
-env = Environment(params)
-
-
-# initial conditions set
-lower = torch.tensor([env.initial.lower[0], env.initial.lower[1], np.pi/4, 0])
-upper = torch.tensor([env.initial.upper[0], env.initial.upper[1], 3*np.pi/4, 2])
-
-
-
-
-in_end_goal = inside_circle(env.final, "distance to final")
-stop_in_end_goal = in_end_goal & (stlcg.Expression('speed')  < 0.5)
-end_goal = stlcg.Eventually(subformula=stlcg.Always(subformula=stop_in_end_goal))
-
-in_coverage = inside_circle(env.covers[0], "distance to coverage") & (stlcg.Expression('speed')  < 2.0)
-coverage = stlcg.Eventually(subformula=stlcg.Always(in_coverage, interval=[0,8]))
-
-avoid_obs = always_outside_circle(env.obs[0], "distance to obstacle")
-
-formula = stlcg.Until(subformula1=coverage, subformula2=end_goal) & avoid_obs
-
-formula_input_func=lambda s, cov, obs: get_formula_input(s, cov, obs, env.final, device, backwards=False)
-stl_graph = stlviz.make_stl_graph(formula)
-stlviz.save_graph(stl_graph, fig_dir + "/stl")
-
+# dynamics
 params={"lr" : 0.7, "lf" : 0.5, "V_min" : 0.0, "V_max" : 5.0, "a_min" : -3, "a_max" : 3, "delta_min" : -0.344, "delta_max" : 0.344, "disturbance_scale" : [0.05, 0.02]}
 
 dynamics = KinematicBicycle(dt, params)
+
+#  setting up environment
+# will be overridden later
+
+p = sample_environment_parameters(case, 1)[0]
+env = generate_env_from_parameters(case, p, carlength=params["lr"]+params["lf"])
+
+# initial conditions and stl formula
+if case == "coverage":
+    lower = torch.tensor([env.initial.lower[0], env.initial.lower[1], np.pi/4, 0])
+    upper = torch.tensor([env.initial.upper[0], env.initial.upper[1], 3*np.pi/4, 2])
+
+    in_end_goal = inside_circle(env.final, "distance to final")
+    stop_in_end_goal = in_end_goal & (stlcg.Expression('speed')  < 0.5)
+    end_goal = stlcg.Eventually(subformula=stlcg.Always(subformula=stop_in_end_goal))
+    in_coverage = inside_circle(env.covers[0], "distance to coverage") & (stlcg.Expression('speed')  < 2.0)
+    coverage = stlcg.Eventually(subformula=stlcg.Always(in_coverage, interval=[0,8]))
+    avoid_obs = always_outside_circle(env.obs[0], "distance to obstacle")
+    formula = stlcg.Until(subformula1=coverage, subformula2=end_goal) & avoid_obs
+    formula_input_func = lambda s, env: get_formula_input_coverage(s, env, device, backwards=False)
+    xlim = [-6, 16]
+    ylim = [-6, 16]
+
+
+
+
+elif case == "drive":
+    lower = torch.tensor([env.initial.lower[0], env.initial.lower[1], np.pi/2, 0])
+    upper = torch.tensor([env.initial.upper[0], env.initial.upper[1], np.pi/2, 1])
+
+    avoid_walls = (stlcg.Expression("distance to left wall") > 0.0) & (stlcg.Expression("distance to right wall") > 0.0)
+    avoid_lane_obs = outside_circle(env.obs[2], "distance to left lane obstacle") & outside_circle(env.obs[3], "distance right lane obstacle")
+    always_avoid_obs = stlcg.Always(subformula=(avoid_walls & avoid_lane_obs))
+    slow_near_obs = stlcg.Always(
+                                      stlcg.Implies(
+                                                    subformula1=((stlcg.Expression("distance to left lane obstacle") <21.5) | (stlcg.Expression("distance to right lane obstacle") < 1.2)), 
+                                                    subformula2=(stlcg.Expression("speed") < .5)
+                                                   )
+                                     )
+
+    # in_goal = (stlcg.Expression("x") > env.final.lower[0]) & (stlcg.Expression("x") < env.final.upper[0]) & (stlcg.Expression("y") > env.final.lower[1]) & (stlcg.Expression("y") > env.final.upper[1])
+    in_goal = stlcg.Expression("distance to goal") > 0
+    speed_up = stlcg.Expression("speed") > 1.0
+    speed_up_goal = stlcg.Eventually(subformula=stlcg.Always(in_goal & speed_up, interval=[0,2]))
+
+    formula = (speed_up_goal & always_avoid_obs) & slow_near_obs
+    formula_input_func = lambda s, env: get_formula_input_drive(s, env, device, backwards=False)
+    xlim = [-2, 14]
+    ylim = [0, 16]
+
+else:
+    raise Exception("Case %s does not exist"%case)
+
+
+stl_graph = stlviz.make_stl_graph(formula)
+stlviz.save_graph(stl_graph, fig_dir + "/stl")
+
+
 model = STLCNNPolicy(dynamics,
                   args.lstm_dim,
                   stats,
                   env).to(device)
 model.switch_device(device)
-case = "coverage"
+
+
+
+
 
 if args.mode == "test":
 
@@ -310,7 +337,9 @@ if args.mode == "test":
               save_model_path="../models/test",
               number=0,
               iter_max=2,
-              status="new"
+              status="new",
+              xlim=xlim,
+              ylim=ylim
               )
     print("train_cnn code completed. Onto adversarial_rejacc_cnn code...")
     ic_adv_, img_p_adv = adversarial_rejacc_cnn(case=case,
@@ -325,7 +354,9 @@ if args.mode == "test":
                                                 number=0,
                                                 lower=lower,
                                                 upper=upper,
-                                                adv_n_samples=128)
+                                                adv_n_samples=128,
+                                                xlim=xlim,
+                                                ylim=ylim)
     n_adv = img_p_adv.shape[0]
     random_n = torch.randperm(n_adv)[:n_train]
     ic_adv_ = ic_adv_[random_n]
@@ -365,7 +396,9 @@ if args.mode == "test":
               save_model_path="../models/test",
               number=0,
               iter_max=2,
-              status="new"
+              status="new",
+              xlim=xlim,
+              ylim=ylim
               )
 
     print("adversarial_rejacc_cnn code completed.")
@@ -412,7 +445,9 @@ elif args.mode == "train":
               save_model_path=model_dir,
               number=args.number,
               iter_max=args.iter_max,
-              status=args.status
+              status=args.status,
+              xlim=xlim,
+              ylim=ylim
               )
 
     prompt = input("Training finished, final comments:")
@@ -426,29 +461,29 @@ elif args.mode == 'eval':
     IPython.embed(banner1="Model loaded in evaluation mode.")
 
 
-elif args.mode == "adversarial":
-    # adv_ic is [bs, 1, x_dim], cpu in unstandardized form
+# elif args.mode == "adversarial":
+#     # adv_ic is [bs, 1, x_dim], cpu in unstandardized form
 
-    adv_ic = adversarial(case=case,
-                         model=model,
-                         T=x_train.shape[1]+4,
-                         formula=formula,
-                         formula_input_func=formula_input_func,
-                         device=device,
-                         tqdm=tqdm.tqdm,
-                         writer=SummaryWriter(log_dir=runs_dir),
-                         hps=hps,
-                         save_model_path=model_dir,
-                         number=args.number,
-                         lower=lower,
-                         upper=upper,
-                         iter_max=args.adv_iter_max,
-                         adv_n_samples=64)
+#     adv_ic = adversarial(case=case,
+#                          model=model,
+#                          T=x_train.shape[1]+4,
+#                          formula=formula,
+#                          formula_input_func=formula_input_func,
+#                          device=device,
+#                          tqdm=tqdm.tqdm,
+#                          writer=SummaryWriter(log_dir=runs_dir),
+#                          hps=hps,
+#                          save_model_path=model_dir,
+#                          number=args.number,
+#                          lower=lower,
+#                          upper=upper,
+#                          iter_max=args.adv_iter_max,
+#                          adv_n_samples=64)
 
-    np.save(adv_dir + "/number={}".format(args.number), adv_ic.detach().numpy())
-    write_log(log_dir, "Adversarial: Saved adversarial initial conditions in npy file number={}".format(args.number))
-    prompt = input("Adversarial training finished, final comments:")
-    write_log(log_dir, "Adversarial: done! {}".format(prompt))
+#     np.save(adv_dir + "/number={}".format(args.number), adv_ic.detach().numpy())
+#     write_log(log_dir, "Adversarial: Saved adversarial initial conditions in npy file number={}".format(args.number))
+#     prompt = input("Adversarial training finished, final comments:")
+#     write_log(log_dir, "Adversarial: done! {}".format(prompt))
 
 
 
@@ -499,7 +534,9 @@ elif args.mode == "adv_training_iteration":
                   save_model_path=model_dir,
                   number=rep,
                   iter_max=args.iter_max * (rep + 1),
-                  status=args.status if (rep== 0) else "continue"
+                  status=args.status if (rep== 0) else "continue",
+                  xlim=xlim,
+                  ylim=ylim
                   )
 
         write_log(log_dir, "Training: {} training phase(s) done".format(rep+1))
@@ -516,7 +553,9 @@ elif args.mode == "adv_training_iteration":
                                                     number=rep,
                                                     lower=lower,
                                                     upper=upper,
-                                                    adv_n_samples=args.adv_n_samples
+                                                    adv_n_samples=args.adv_n_samples,
+                                                    xlim=xlim,
+                                                    ylim=ylim
                                                     )
 
         write_log(log_dir, "Adversarial number={} done".format(rep))
@@ -596,7 +635,9 @@ elif args.mode == "adv_training_iteration_rapid":
               save_model_path=model_dir,
               number=0,
               iter_max=args.iter_max,
-              status=args.status
+              status=args.status,
+              xlim=xlim,
+              ylim=ylim
               )
 
     write_log(log_dir, "First training phase done:")
@@ -634,7 +675,9 @@ elif args.mode == "adv_training_iteration_rapid":
                   save_model_path=model_dir,
                   number=rep+1,
                   iter_max=args.iter_max * (args.number + 1) + mini_iter_max * (rep + 1),
-                  status="continue"
+                  status="continue",
+                  xlim=xlim,
+                  ylim=ylim
                   )
 
 
@@ -650,7 +693,9 @@ elif args.mode == "adv_training_iteration_rapid":
                                                     number=rep,
                                                     lower=lower,
                                                     upper=upper,
-                                                    adv_n_samples=args.adv_n_samples
+                                                    adv_n_samples=args.adv_n_samples,
+                                                    xlim=xlim,
+                                                    ylim=ylim
                                                 )
         trainset_size = args.trainset_size
 

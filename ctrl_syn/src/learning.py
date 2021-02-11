@@ -53,32 +53,58 @@ def prepare_data(npy_file, batch_dim=0):
     return x, u, [mu, sigma]
 
 
-def prepare_data_img(filedir, batch_dim=0, height=480, width=480):
-    data_tls = [np.load(fi).shape[0] for fi in sorted(glob.glob(filedir+'*'))]
-    max_tl = max(data_tls)
-    n_data = len(data_tls)
-    data = torch.zeros([n_data, max_tl, 6]).requires_grad_(False)
-    data_list = []
-    imgs = torch.zeros([n_data, 4, height, width]).requires_grad_(False)
-    tls = torch.zeros([n_data]).requires_grad_(False)
-    centers = torch.zeros([n_data]).requires_grad_(False)
+def prepare_data_img(case, filedir, batch_dim=0, height=480, width=480, dpi=500):
+    if case == "coverage":
+        data_tls = [np.load(fi).shape[0] for fi in sorted(glob.glob(filedir+'*'))]
+        max_tl = max(data_tls)
+        n_data = len(data_tls)
+        data = torch.zeros([n_data, max_tl, 6]).requires_grad_(False)
+        data_list = []
+        imgs = torch.zeros([n_data, 4, height, width]).requires_grad_(False)
+        tls = torch.zeros([n_data]).requires_grad_(False)
+        centers = torch.zeros([n_data]).requires_grad_(False)
 
-    for (j,fi) in enumerate(sorted(glob.glob(filedir+'*'))):
-        fi_split = fi.split('_')
-        i = fi_split[-2]
+        for (j,fi) in enumerate(sorted(glob.glob(filedir+'*'))):
+            fi_split = fi.split('_')
+            i = fi_split[-2]
 
-        imgs[j,:,:,:] = convert_env_img_to_tensor(os.path.join(pardir, "figs/environments/%.1f"%float(i)))
-        data_j = torch.tensor(np.load(fi)[:,1:]).float()
-        data_list.append(data_j)
-        traj_length = data_j.shape[0]
-        data[j,:traj_length, :] = data_j
+            imgs[j,:,:,:] = convert_env_img_to_tensor(os.path.join(pardir, "figs/environments/%.1f"%float(i)))
+            data_j = torch.tensor(np.load(fi)[:,1:]).float()
+            data_list.append(data_j)
+            traj_length = data_j.shape[0]
+            data[j,:traj_length, :] = data_j
 
-        tls[j] = traj_length
-        centers[j] = float(i)
+            tls[j] = traj_length
+            centers[j] = float(i)
 
-    mu = torch.cat(data_list, dim=0).mean(0).unsqueeze(0).unsqueeze(0)
-    sigma = torch.cat(data_list, dim=0).std(0).unsqueeze(0).unsqueeze(0)
+        mu = torch.cat(data_list, dim=0).mean(0).unsqueeze(0).unsqueeze(0)
+        sigma = torch.cat(data_list, dim=0).std(0).unsqueeze(0).unsqueeze(0)
 
+    elif case == "drive":
+        data_tls = [np.load(fi).shape[0] for fi in sorted(glob.glob(filedir+'*'))]
+        max_tl = max(data_tls)
+        n_data = len(data_tls)
+        data = torch.zeros([n_data, max_tl, 6]).requires_grad_(False)
+        data_list = []
+        imgs = torch.zeros([n_data, 4, height, width]).requires_grad_(False)
+        tls = torch.zeros([n_data]).requires_grad_(False)
+        centers = torch.zeros([n_data, 2]).requires_grad_(False)
+        ps = [[8, -10], [-10, 6], [8, 4], [7, -10], [-10, 7], [3, 7]]
+
+        for (j,fi) in enumerate(sorted(glob.glob(filedir+'*'))):
+            fi_split = fi.split('_')
+            i = fi_split[-1][0]
+            imgs[j,:,:,:] = generate_img_tensor_from_parameter(case, ps[j], width=width, height=height, dpi=dpi)
+            data_j = torch.tensor(np.load(fi)[:,1:]).float()
+            data_list.append(data_j)
+            traj_length = data_j.shape[0]
+            data[j,:traj_length, :] = data_j
+
+            tls[j] = traj_length
+            centers[j] = torch.tensor(ps[j]).float()
+
+        mu = torch.cat(data_list, dim=0).mean(0).unsqueeze(0).unsqueeze(0)
+        sigma = torch.cat(data_list, dim=0).std(0).unsqueeze(0).unsqueeze(0)
     return data[:,:,:4], data[:,:,4:6], tls, imgs, [mu, sigma], centers
 
 def convert_env_img_to_tensor(img_path, grey=torchvision.transforms.Grayscale(), resize=torchvision.transforms.Resize([480, 480])):
@@ -174,17 +200,22 @@ def update_environment(case, env, p, ic_bs, carlength=1.2):
     elif case == "drive":
         obs = p
         if len(obs.shape) > 1:
-            env.obs[2].lower = torch.tensor(np.stack([np.ones_like(obs[:,0]) * 5.2, obs[:,0]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
-            env.obs[2].upper = torch.tensor(np.stack([np.ones_like(obs[:,0]) * 5.8, (obs[:,0] + carlength)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+            # env.obs[2].lower = torch.tensor(np.stack([np.ones_like(obs[:,0]) * 5.2, obs[:,0]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+            # env.obs[2].upper = torch.tensor(np.stack([np.ones_like(obs[:,0]) * 5.8, (obs[:,0] + carlength)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
 
-            env.obs[3].lower = torch.tensor(np.stack([np.ones_like(obs[:,1]) * 6.2, obs[:,1]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
-            env.obs[3].upper = torch.tensor(np.stack([np.ones_like(obs[:,1]) * 6.8, (obs[:,1] + carlength)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+            # env.obs[3].lower = torch.tensor(np.stack([np.ones_like(obs[:,1]) * 6.2, obs[:,1]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+            # env.obs[3].upper = torch.tensor(np.stack([np.ones_like(obs[:,1]) * 6.8, (obs[:,1] + carlength)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+
+            env.obs[2].center = torch.tensor(np.stack([np.ones_like(obs[:,0]) * 5.5, obs[:,0]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
+            env.obs[3].center = torch.tensor(np.stack([np.ones_like(obs[:,1]) * 6.5, obs[:,1]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])
         else:
-            env.obs[2].lower = [5.2, obs[0]]
-            env.obs[2].upper = [5.8, obs[0] + carlength]
+            # env.obs[2].lower = [5.2, obs[0]]
+            # env.obs[2].upper = [5.8, obs[0] + carlength]
 
-            env.obs[3].lower = [6.2, obs[1]]
-            env.obs[3].upper = [6.8, obs[1] + carlength]
+            # env.obs[3].lower = [6.2, obs[1]]
+            # env.obs[3].upper = [6.8, obs[1] + carlength]
+            env.obs[2].center = [5.5, obs[0]]
+            env.obs[3].center = [6.5, obs[1]]
         return obs
     else:
         raise Exception("Case %s does not exist"%case)
@@ -200,11 +231,14 @@ def append_environment(case, env, p, ic_bs, carlength=1.2):
         return centers
     elif case == "drive":
         obs = p
-        env.obs[2].lower = torch.cat([env.obs[2].lower, torch.tensor(np.stack([np.ones_like(obs[:,0]) * 5.2, obs[:,0]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
-        env.obs[2].upper = torch.cat([env.obs[2].upper, torch.tensor(np.stack([np.ones_like(obs[:,0]) * 5.8, (obs[:,0] + carlength)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
+        # env.obs[2].lower = torch.cat([env.obs[2].lower, torch.tensor(np.stack([np.ones_like(obs[:,0]) * 5.2, obs[:,0]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
+        # env.obs[2].upper = torch.cat([env.obs[2].upper, torch.tensor(np.stack([np.ones_like(obs[:,0]) * 5.8, (obs[:,0] + carlength)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
 
-        env.obs[3].lower = torch.cat([env.obs[3].lower, torch.tensor(np.stack([np.ones_like(obs[:,1]) * 6.2, obs[:,1]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
-        env.obs[3].upper = torch.cat([env.obs[3].upper, torch.tensor(np.stack([np.ones_like(obs[:,1]) * 6.8, (obs[:,1] + carlength)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
+        # env.obs[3].lower = torch.cat([env.obs[3].lower, torch.tensor(np.stack([np.ones_like(obs[:,1]) * 6.2, obs[:,1]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
+        # env.obs[3].upper = torch.cat([env.obs[3].upper, torch.tensor(np.stack([np.ones_like(obs[:,1]) * 6.8, (obs[:,1] + carlength)], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
+
+        env.obs[2].center = torch.cat([env.obs[2].center, torch.tensor(np.stack([np.ones_like(obs[:,0]) * 5.5, obs[:,0]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
+        env.obs[3].center = torch.cat([env.obs[3].center, torch.tensor(np.stack([np.ones_like(obs[:,1]) * 6.5, obs[:,1]], axis=1)).unsqueeze(1).unsqueeze(1).repeat([1, ic_bs, 1, 1]).view([-1, 1, 2])], dim=0)
         return obs
     else:
         raise Exception("Case %s does not exist"%case)
@@ -239,8 +273,8 @@ def generate_img_tensor_from_parameter(case, p, carlength=1.2, width=480, height
         xlim = [-5, 15]
         ylim = [-5, 15]
     elif case == "drive":
-        xlim = [0, 12]
-        ylim = [0, 12]
+        xlim = [-2, 14]
+        ylim = [0, 16]
     return generate_img_tensor(env, width=width, height=height, dpi=dpi, xlim=xlim, ylim=ylim)
 
 
@@ -267,29 +301,25 @@ def generate_env_from_parameters(case, p, carlength=1.2):
         return Environment(params)
 
     elif case == "drive":
-        if p[0] == -10:
-            car = [Box([5.2, -10], [5.8, -10 + carlength]), Box([6.2, p[1]], [6.8, p[1] + carlength])]
-        elif p[1] == -10:
-            car = [Box([5.2, p[0]], [5.8, p[0] + carlength]), Box([6.2, -10], [6.8, -10 + carlength])]
-        else:
-            car = [Box([5.2, p[0]], [5.8, p[0] + carlength]), Box([6.2, p[1]], [6.8, p[1] + carlength])]
+        # car = [Box([5.2, p[0]], [5.8, p[0] + carlength]), Box([6.2, p[1]], [6.8, p[1] + carlength])]
+        car = [Circle([5.5, p[0]], 0.4), Circle([6.5, p[1]], 0.4)]
             
         params = { "covers": [],
-                   "obstacles": [Box([0,0], [5, 12]), Box([7,0], [12, 12])] + car,
-                   "initial": Box([6.2, 1.0],[6.8, 2.0]),
-                   "final": Box([6.2, 10.0],[6.8, 12.0])
+                   "obstacles": [Box([-2,0], [5, 16]), Box([7,0], [14, 16])] + car,
+                   "initial": Box([6.35, 0.0],[6.65, 1.0]),
+                   "final": Box([6.35, 11.0],[6.65, 16.0])
                 } 
         return Environment(params)
 
-def update_drive_env_parameters(env, p, carlength=1.2):  
-    if np.isnan(p[0]):
-        car = [Box([6.2, p[1]], [6.8, p[1] + carlength])]
-    elif np.isnan(p[1]):
-        car = [Box([5.2, p[0]], [5.8, p[0] + carlength])]
-    else:
-        car = [Box([5.2, p[0]], [5.8, p[0] + carlength]), Box([6.2, p[0]], [6.8, p[0] + carlength])]
+# def update_drive_env_parameters(env, p, carlength=1.2):  
+#     if np.isnan(p[0]):
+#         car = [Box([6.2, p[1]], [6.8, p[1] + carlength])]
+#     elif np.isnan(p[1]):
+#         car = [Box([5.2, p[0]], [5.8, p[0] + carlength])]
+#     else:
+#         car = [Box([5.2, p[0]], [5.8, p[0] + carlength]), Box([6.2, p[0]], [6.8, p[0] + carlength])]
         
-    env.obs = [Box([0,0], [5, 12]), Box([7,0], [12, 12])] + car
+#     env.obs = [Box([0,0], [5, 12]), Box([7,0], [12, 12])] + car
 
 
 
@@ -865,7 +895,7 @@ class STLCNNPolicy(torch.nn.Module):
 
     def STL_robustness(self, x, formula, formula_input, **kwargs):
         signal = self.unstandardize_x(x)    # [bs, time_dim, state_dim]
-        return formula.robustness(formula_input(signal, self.env.covers[0], self.env.obs[0]), **kwargs)
+        return formula.robustness(formula_input(signal, self.env), **kwargs)
 
     def STL_loss(self, x, formula, formula_input, **kwargs):
         # penalize negative robustness values only

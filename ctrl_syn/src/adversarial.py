@@ -226,6 +226,7 @@ def adversarial_rejacc_cnn(case, model, T, formula, formula_input_func, device, 
         # with ICs, propagate the trajectories
         xdim = x0.shape[-1]
         ps = sample_and_update_environment(case, model.env, img_bs, mini_bs, carlength=carlength)
+        img_bs = ps.shape[0]
 
 
         ic_imgs = torch.stack([generate_img_tensor_from_parameter(case, pi) for pi in ps]).to(device)
@@ -258,7 +259,7 @@ def adversarial_rejacc_cnn(case, model, T, formula, formula_input_func, device, 
     adv_ic = torch.cat(adv_ic, dim=0)
     adv_env_param = torch.cat(adv_env_param, dim=0)
     unique_env_params, unique_idx = torch.unique(adv_env_param, return_inverse=True, sorted=True, dim=0) # unique centers, and associated idx
-    N_subplots = min(unique_env_params.shape[0], 4)
+    N_subplots = min(unique_env_params.shape[0], 10)
     rand_idx = torch.randperm(unique_env_params.shape[0])[:N_subplots] # choose 10 random unique indices
     relevant_idx = sum(unique_idx == ri for ri in rand_idx) == 1 # get relevant indices for the selected 10 unique numbers
     unique_adv_env_param = adv_env_param[relevant_idx]
