@@ -248,13 +248,13 @@ elif case == "drive":
     always_avoid_obs = stlcg.Always(subformula=(avoid_walls & avoid_lane_obs))
     slow_near_obs = stlcg.Always(
                                       stlcg.Implies(
-                                                    subformula1=((stlcg.Expression("distance to left lane obstacle") <21.5) | (stlcg.Expression("distance to right lane obstacle") < 1.2)), 
+                                                    subformula1=((stlcg.Expression("distance to left lane obstacle") < 1.0) | (stlcg.Expression("distance to right lane obstacle") < 1.0)), 
                                                     subformula2=(stlcg.Expression("speed") < .5)
                                                    )
                                      )
 
     # in_goal = (stlcg.Expression("x") > env.final.lower[0]) & (stlcg.Expression("x") < env.final.upper[0]) & (stlcg.Expression("y") > env.final.lower[1]) & (stlcg.Expression("y") > env.final.upper[1])
-    in_goal = stlcg.Expression("distance to goal") > 0
+    in_goal = stlcg.Expression("distance to goal") < 0
     speed_up = stlcg.Expression("speed") > 1.0
     speed_up_goal = stlcg.Eventually(subformula=stlcg.Always(in_goal & speed_up, interval=[0,2]))
 
@@ -452,39 +452,6 @@ elif args.mode == "train":
 
     prompt = input("Training finished, final comments:")
     write_log(log_dir, "Training: done! {}".format(prompt))
-
-elif args.mode == 'eval':
-    checkpoint = torch.load(model_dir)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
-
-    IPython.embed(banner1="Model loaded in evaluation mode.")
-
-
-# elif args.mode == "adversarial":
-#     # adv_ic is [bs, 1, x_dim], cpu in unstandardized form
-
-#     adv_ic = adversarial(case=case,
-#                          model=model,
-#                          T=x_train.shape[1]+4,
-#                          formula=formula,
-#                          formula_input_func=formula_input_func,
-#                          device=device,
-#                          tqdm=tqdm.tqdm,
-#                          writer=SummaryWriter(log_dir=runs_dir),
-#                          hps=hps,
-#                          save_model_path=model_dir,
-#                          number=args.number,
-#                          lower=lower,
-#                          upper=upper,
-#                          iter_max=args.adv_iter_max,
-#                          adv_n_samples=64)
-
-#     np.save(adv_dir + "/number={}".format(args.number), adv_ic.detach().numpy())
-#     write_log(log_dir, "Adversarial: Saved adversarial initial conditions in npy file number={}".format(args.number))
-#     prompt = input("Adversarial training finished, final comments:")
-#     write_log(log_dir, "Adversarial: done! {}".format(prompt))
-
 
 
 elif args.mode == "adv_training_iteration":

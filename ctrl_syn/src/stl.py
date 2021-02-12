@@ -12,7 +12,7 @@ import IPython
 
 
 def inside_circle(cover, name):
-    return stlcg.Expression(name) < cover.radius
+    return stlcg.Expression(name) < cover.radius**2
 
 def always_inside_circle(cover, name, interval=[0,5]):
     return stlcg.Always(subformula=inside_circle(cover, name), interval=interval)
@@ -49,6 +49,8 @@ def wall_input(signal, wall, device='cpu', backwards=False, time_dim=1, LF=0.5, 
     else:
         wall[1] = torch.Tensor(wall[1]).to(device).float()
     return distance_rec_wall(signal, wall, LF=LF, LR=LR, W=W)
+
+
 # def circle_input(signal, cover, device='cpu', backwards=False, time_dim=1):
 #     if not backwards:
 #         signal = signal.flip(time_dim)
@@ -96,20 +98,24 @@ def get_formula_input_drive(signal, env, device, backwards=False):
 
 def perpendicular_distance(n, p, q):
     ''' 
-    n: normal vector of line
-    p: point we want to compute the distance of
+    Computes the perpendicular distance between a line and a point
+    The sizes of the n, p, and q nbeed to be consistent. The dot product is done w.r.t. to dim=-1.
+    n: normal vector of line. torch.Tensor
+    p: point we want to compute the distance from
     q: point on the line.
     '''
-#     return (np.dot(n, p) - np.dot(n, q)) / np.sqrt(np.dot(n,n))
     return ((n * p).sum(-1, keepdims=True) - (n * q).sum(-1, keepdims=True))/ (n * n).sum(-1, keepdims=True).sqrt()
 
 def get_rec_edges(traj, LF=0.5, LR=0.7, W=1.2/2):
-    # get edges of the car given the state/traj
+    '''
+    Get edges of a rectangle if given the center of mass of the rectangle or a Box object
+    traj: tensor of size [bs, timd_dim, x_dim] or Box object
+    LF, LR, W are the size of the box if tensor is given.
+    '''
     if isinstance(traj, torch.Tensor):
         ns = torch.stack([torch.cat([torch.cos(traj[:,:,2:3] + np.pi/2 * i), torch.sin(traj[:,:,2:3] + np.pi/2 * i)], dim=-1) for i in range(4)])    # [4, bs, time, 2]
         ds = [LF, W/2, LR, W/2]
         qs = torch.stack([traj[:,:,:2] + di*ni for (di,ni) in zip(ds, ns)])
-        # get edges of a Box object
     else:
         rec = traj
         center = torch.tensor([(li+ui)/2 for (li,ui) in zip(rec.lower, rec.upper)]).view(1,1,2).float()    # [1, 1, 2]
@@ -117,21 +123,39 @@ def get_rec_edges(traj, LF=0.5, LR=0.7, W=1.2/2):
         ns = torch.tensor(np.array([[np.cos(np.pi/2 + np.pi/2 * i), np.sin(np.pi/2 + np.pi/2 * i)] for i in range(4)])).view(4, 1, 1, 2).float()    # [4, bs, time, 2]
         ds = [h/2, w/2, h/2, w/2]
         qs = torch.stack([center[:,:,:2] + di*ni for (di,ni) in zip(ds, ns)]).float()
-    # else:
-    #     raise Exception("traj type unknown")
+
     return ns, qs
 
 def distance_rec_point(traj, p, LF=0.5, LR=0.7, W=1.2/2):
+    '''
+    Computes the distance between a rectangle and point. > 0 if point is outside the rectangle, < 0 if inside the rectangle. 
+    traj: tensor of size [bs, timd_dim, x_dim] or Box object
+    p: point of type torch.Tensor. The size needs to be consistent with traj
+    LF, LR, W are the size of the box if tensor is given.
+    '''
     ns, qs = get_rec_edges(traj, LF=LF, LR=LR, W=W)
     ds = torch.stack([perpendicular_distance(ni, p, qi) for (ni, qi) in zip(ns, qs)])
-    return torch.where((ds >=0).sum(0) > 0, ds.relu().pow(2).sum(0).sqrt(), ds.max(0)[0])
+    return torch.where((ds >=0).sum(0) > 0, ds.relu().pow(2).sum(0), -ds.max(0)[0].pow(2))
 
 def distance_rec_rec(traj, rec, device="cpu"):
+    '''
+    Computes the distance between a point (traj) and a rectangle given as a Box object.
+    > 0 if point is outside the rectangle, < 0 if inside the rectangle. 
+    traj: tensor of size [bs, timd_dim, x_dim] or Box object
+    rec: Box object
+    '''
     ns, qs = get_rec_edges(rec)
     ds = torch.stack([perpendicular_distance(ni, traj[:,:,:2], qi) for (ni, qi) in zip(ns.to(device), qs.to(device))])
-    return -ds.max(0)[0]
+    return torch.where((ds >=0).sum(0) > 0, ds.relu().pow(2).sum(0), -ds.max(0)[0].pow(2))
 
 def distance_rec_wall(traj, wall, LF=0.5, LR=0.7, W=1.2/2):
+    '''
+    Computes the distance between a rectangle (given the center of mass) and a line (wall)
+    traj: torch.Tensor of size [bs, time_dim, xdim]
+    wall: tuple (normal vector of wall, point on wall) 
+    LF, LR, W are the size of the box if tensor is given.
+
+    '''
     ns, qs = get_rec_edges(traj, LF=LF, LR=LR, W=W)
     corners = torch.stack([qi + di * ns[i-1] for (i ,(qi, di)) in enumerate(zip(qs, [W/2, LF, W/2, LR]))])
     return torch.stack([perpendicular_distance(wall[0], ci, wall[1]) for ci in corners]).min(0)[0]
