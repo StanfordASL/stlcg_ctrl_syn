@@ -12,7 +12,7 @@ import IPython
 
 
 def inside_circle(cover, name):
-    return stlcg.Expression(name) < cover.radius**2
+    return stlcg.LessThan(name, cover.radius)
 
 def always_inside_circle(cover, name, interval=[0,5]):
     return stlcg.Always(subformula=inside_circle(cover, name), interval=interval)
@@ -135,7 +135,7 @@ def distance_rec_point(traj, p, LF=0.5, LR=0.7, W=1.2/2):
     '''
     ns, qs = get_rec_edges(traj, LF=LF, LR=LR, W=W)
     ds = torch.stack([perpendicular_distance(ni, p, qi) for (ni, qi) in zip(ns, qs)])
-    return torch.where((ds >=0).sum(0) > 0, ds.relu().pow(2).sum(0), -ds.max(0)[0].pow(2))
+    return torch.where((ds >=0).sum(0) > 0, ds.relu().pow(2).sum(0).sqrt(), ds.max(0)[0])
 
 def distance_rec_rec(traj, rec, device="cpu"):
     '''
@@ -146,7 +146,7 @@ def distance_rec_rec(traj, rec, device="cpu"):
     '''
     ns, qs = get_rec_edges(rec)
     ds = torch.stack([perpendicular_distance(ni, traj[:,:,:2], qi) for (ni, qi) in zip(ns.to(device), qs.to(device))])
-    return torch.where((ds >=0).sum(0) > 0, ds.relu().pow(2).sum(0), -ds.max(0)[0].pow(2))
+    return torch.where((ds >=0).sum(0) > 0, ds.relu().pow(2).sum(0).sqrt(), ds.max(0)[0])
 
 def distance_rec_wall(traj, wall, LF=0.5, LR=0.7, W=1.2/2):
     '''

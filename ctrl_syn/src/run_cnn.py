@@ -138,8 +138,8 @@ elif args.action != "test":
     make_directory(nan_dir)
     write_log(log_dir, "\n\n" + model_name)
 
-prompt = input("Additional model information: ")
-write_log(log_dir, "Additional model info: {}".format(prompt))
+# prompt = input("Additional model information: ")
+# write_log(log_dir, "Additional model info: {}".format(prompt))
 
 
 print(vars(args))
@@ -248,7 +248,7 @@ elif case == "drive":
     always_avoid_obs = stlcg.Always(subformula=(avoid_walls & avoid_lane_obs))
     slow_near_obs = stlcg.Always(
                                       stlcg.Implies(
-                                                    subformula1=((stlcg.Expression("distance to left lane obstacle") < 1.0) | (stlcg.Expression("distance to right lane obstacle") < 1.0)), 
+                                                    subformula1=((stlcg.Expression("distance to left lane obstacle") < 1.2) | (stlcg.Expression("distance to right lane obstacle") < 1.2)), 
                                                     subformula2=(stlcg.Expression("speed") < .5)
                                                    )
                                      )
@@ -609,20 +609,42 @@ elif args.mode == "adv_training_iteration_rapid":
 
     write_log(log_dir, "First training phase done:")
 
+    mini_iter_max = 20
+    b = 80 / (1000.0/mini_iter_max)
+    c = 6
+    teacher_training = lambda ep: sigmoidal_anneal(ep, 0.8, 1.0, b, c)
+    write_log(log_dir, "Teacher training: min={} max={} b={} c={}".format(0.8, 1.0, b, c))
+
+    stl_scale = lambda ep: sigmoidal_anneal(ep, 15, 50, b, c)
+    write_log(log_dir, "STL scale: min={} max={} b={} c={}".format(20, 50, b, c))
+
     hps = hyperparameters(weight_decay=0.05,
               learning_rate=0.1,
-              teacher_training=lambda ep: 1.0,
+              teacher_training=teacher_training,
               weight_ctrl=args.weight_ctrl,
-              weight_recon=args.weight_recon,
+              weight_recon=args.weight_recon / 3 * 2,
               weight_stl=lambda ep: args.stl_max,
-              stl_scale=lambda ep: args.scale_max,
+              stl_scale=stl_scale,
               adv_stl_scale=1.0,
               alpha=0.001,
               img_bs=4,
               expert_mini_bs=args.expert_mini_bs)
 
-    mini_iter_max = 20
-    for rep in range(20):
+
+
+    
+    for rep in range(5):
+        # hps = hyperparameters(weight_decay=0.05,
+        #                   learning_rate=0.1,
+        #                   teacher_training=lambda ep: 1.0,
+        #                   weight_ctrl=args.weight_ctrl,
+        #                   weight_recon=args.weight_recon,
+        #                   weight_stl=lambda ep: 0.1 + (ep - (args.iter_max * (args.number + 1) + mini_iter_max * rep)) / mini_iter_max * 0.4,
+        #                   stl_scale=lambda ep: 0.1 + (ep - (args.iter_max * (args.number + 1) + mini_iter_max * rep)) / mini_iter_max * 49.9,
+        #                   adv_stl_scale=1.0,
+        #                   alpha=0.001,
+        #                   img_bs=4,
+        #                   expert_mini_bs=args.expert_mini_bs)
 
         train_cnn(case=case,
                   model=model,
@@ -693,7 +715,6 @@ elif args.mode == "adv_training_iteration_rapid":
 
         ic_trainloader = torch.utils.data.DataLoader(ic_train, batch_size=mini_batch//2, shuffle=True)
         ic_evalloader = torch.utils.data.DataLoader(ic_eval, batch_size=args.evalset_size, shuffle=False)
-
 
 else:
     raise NameError("args.mode undefined")

@@ -101,7 +101,10 @@ def train_cnn(case, model, train_traj, eval_traj, imgs, tls, env_param, formula,
     carlength = 1.2
     height = 2
 
-    with tqdm(total=(iter_max - train_iteration)) as pbar:
+    iter0 = train_iteration
+    total_iter = iter_max - iter0
+
+    with tqdm(total=(total_iter)) as pbar:
         while True:
             if train_iteration == iter_max:
                 torch.save({
@@ -125,7 +128,9 @@ def train_cnn(case, model, train_traj, eval_traj, imgs, tls, env_param, formula,
                            save_model_path + "/model_{:02d}".format(number))
                 return
 
-            hps_idx = train_iteration % (iter_max // (number + 1))
+
+            hps_idx = train_iteration - iter0
+            # hps_idx = train_iteration % (iter_max // (number + 1))
             for (batch_idx, ic_) in enumerate(train_loader):
 
 
@@ -174,8 +179,8 @@ def train_cnn(case, model, train_traj, eval_traj, imgs, tls, env_param, formula,
                 loss_stl_true = model.STL_loss(complete_traj, formula, formula_input_func, scale=-1)
 
                 # total loss
-                loss = hps.weight_recon * loss_recon + weight_stl * loss_stl
-
+                loss = hps.weight_recon * loss_recon + weight_stl * loss_stl 
+                 # + 0.5 * u_future.pow(2).mean() 
                 if (train_iteration % 10) == 0:
                     
                     torch.save({

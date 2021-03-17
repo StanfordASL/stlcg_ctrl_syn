@@ -89,7 +89,7 @@ def prepare_data_img(case, filedir, batch_dim=0, height=480, width=480, dpi=500)
         imgs = torch.zeros([n_data, 4, height, width]).requires_grad_(False)
         tls = torch.zeros([n_data]).requires_grad_(False)
         centers = torch.zeros([n_data, 2]).requires_grad_(False)
-        ps = [[8, -10], [-10, 6], [8, 4], [7, -10], [-10, 7], [3, 7]]
+        ps = [[8, -10], [-10, 6], [8, 4], [7, -10], [-10, 7], [3, 7], [3, -10], [10, -10]]
 
         for (j,fi) in enumerate(sorted(glob.glob(filedir+'*'))):
             fi_split = fi.split('_')
@@ -250,23 +250,6 @@ def sample_and_update_environment(case, env, img_bs, ic_bs, carlength=1.2):
     return update_environment(case, env, p, ic_bs, carlength=carlength)
 
 
-
-# def generate_img_tensor_parameter(cover_x, width=480, height=480, dpi=500, xlim=[-5,15], ylim=[-5,15]):
-#     final_x = 5.0
-#     obs_x = (cover_x + final_x) / 2
-#     params = { "covers": [Circle([cover_x, 3.5], 2.0)],
-#        "obstacles": [Circle([obs_x, 9.], 1.5)],
-#        "initial": Box([2, -4.],[8, -2]),
-#        "final": Circle([final_x, 13], 1.0)
-#     } 
-#     env = Environment(params)
-
-#     return generate_img_tensor(env, width=width, height=height, dpi=dpi, xlim=xlim, ylim=ylim)
-
-# def generate_img_drive_tensor_parameter(p, carlength=1.2, width=480, height=480, dpi=500, xlim=[0,12], ylim=[0,12]):
-#     env = generate_drive_env_parameters(p, carlength=carlength)
-#     return generate_img_tensor(env, width=width, height=height, dpi=dpi, xlim=xlim, ylim=ylim)
-
 def generate_img_tensor_from_parameter(case, p, carlength=1.2, width=480, height=480, dpi=500):
     env = generate_env_from_parameters(case, p, carlength=carlength)
     if case == "coverage":
@@ -280,7 +263,7 @@ def generate_img_tensor_from_parameter(case, p, carlength=1.2, width=480, height
 
 def generate_random_drive_parameters(carlength=1.2):
     left1 = np.random.rand() * 6 + 2
-    right2 = np.random.rand() * 6 + 2
+    right2 = np.random.rand() * 5 + 3
     right3 = np.random.rand(1) * 3 + 5
     while True:
         left3 = np.random.rand(1) * 10 + 1
@@ -302,7 +285,7 @@ def generate_env_from_parameters(case, p, carlength=1.2):
 
     elif case == "drive":
         # car = [Box([5.2, p[0]], [5.8, p[0] + carlength]), Box([6.2, p[1]], [6.8, p[1] + carlength])]
-        car = [Circle([5.5, p[0]], 0.4), Circle([6.5, p[1]], 0.4)]
+        car = [Circle([5.5, p[0]], 0.5), Circle([6.5, p[1]], 0.5)]
             
         params = { "covers": [],
                    "obstacles": [Box([-2,0], [5, 16]), Box([7,0], [14, 16])] + car,
@@ -310,36 +293,6 @@ def generate_env_from_parameters(case, p, carlength=1.2):
                    "final": Box([6.35, 11.0],[6.65, 16.0])
                 } 
         return Environment(params)
-
-# def update_drive_env_parameters(env, p, carlength=1.2):  
-#     if np.isnan(p[0]):
-#         car = [Box([6.2, p[1]], [6.8, p[1] + carlength])]
-#     elif np.isnan(p[1]):
-#         car = [Box([5.2, p[0]], [5.8, p[0] + carlength])]
-#     else:
-#         car = [Box([5.2, p[0]], [5.8, p[0] + carlength]), Box([6.2, p[0]], [6.8, p[0] + carlength])]
-        
-#     env.obs = [Box([0,0], [5, 12]), Box([7,0], [12, 12])] + car
-
-
-
-
-# class ExpertTrajImageDataset(torch.utils.data.Dataset):
-
-#     def __init__(self, filedir, batch_dim=0, height=480, width=480):
-#         self.data, self.tls, self.imgs = prepare_data_img(filedir)
-
-
-#     def __len__(self):
-#         return self.data.shape[batch_dim]
-
-#     def __getitem__(self, idx):
-#         if torch.is_tensor(idx):
-#             idx = idx.tolist()
-            
-        
-#         return {"x": self.data[idx,:,:4], "u": self.data[idx,:,4:6], "tl": self.tls[idx], "img": self.imgs[idx,:,:,:]}
-
 
 def standardize_data(x, mu, sigma):
     return (x - mu)/sigma
