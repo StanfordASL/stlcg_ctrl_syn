@@ -650,7 +650,12 @@ class STLCNNPolicy(torch.nn.Module):
 
 
         self.lstm = torch.nn.LSTM(self.state_dim, hidden_dim, num_layers, dropout=dropout, batch_first=True)
-        self.proj = torch.nn.Sequential(torch.nn.Linear(hidden_dim, dynamics.ctrl_dim), torch.nn.Tanh())
+        # self.proj = torch.nn.Sequential(torch.nn.Linear(hidden_dim, dynamics.ctrl_dim), 
+        #                                 torch.nn.Tanh())
+        self.proj = torch.nn.Sequential(torch.nn.Linear(hidden_dim, hidden_dim),
+                                        torch.nn.ReLU(),
+                                        torch.nn.Linear(hidden_dim, dynamics.ctrl_dim), 
+                                        torch.nn.Tanh())
         self.initialize_rnn_h = torch.nn.Sequential(torch.nn.Linear(8 * 8 + self.state_dim, hidden_dim),
                                                     torch.nn.Tanh(),
                                                     torch.nn.Linear(hidden_dim, hidden_dim),

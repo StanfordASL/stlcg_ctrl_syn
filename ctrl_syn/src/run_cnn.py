@@ -21,12 +21,10 @@ from torch_interpolations.torch_interpolations.multilinear import RegularGridInt
 from torch.utils.tensorboard import SummaryWriter
 
 from environment import *
-from src.learning import *
 from learning import *
 from utils import *
 from stl import *
 from train import train_cnn
-from test import test
 from adversarial import *
 
 import IPython
@@ -249,7 +247,7 @@ elif case == "drive":
     slow_near_obs = stlcg.Always(
                                       stlcg.Implies(
                                                     subformula1=((stlcg.Expression("distance to left lane obstacle") < 1.2) | (stlcg.Expression("distance to right lane obstacle") < 1.2)), 
-                                                    subformula2=(stlcg.Expression("speed") < .5)
+                                                    subformula2=(stlcg.Expression("speed") < .55)
                                                    )
                                      )
 
