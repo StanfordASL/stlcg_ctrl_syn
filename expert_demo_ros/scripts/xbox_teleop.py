@@ -1,4 +1,4 @@
-#!/usr/bin/env python 
+#!/usr/bin/env python3
 import rospy
 import numpy as np
 from std_msgs.msg import Bool
@@ -31,7 +31,7 @@ class XboxTeleopSim:
         if not self.reset_flag:
             self.control.header.stamp = rospy.Time.now()
             # self.control.data.data = [msg.axes[0], msg.axes[1]]
-            self.control.data.data = [msg.axes[2], msg.axes[5], msg.axes[0]]
+            self.control.data.data = [(1-msg.axes[2])/2, (1-msg.axes[5])/2, msg.axes[0]]
 
         # press the start button to put the robot back to the start region
         if msg.buttons[7] == 1:
@@ -47,9 +47,14 @@ class XboxTeleopSim:
             self.reset_flag_pub.publish(Bool(True))
 
             if msg.axes[2] == -1:
-                upper = np.array(rospy.get_param("upper", [2, -4, np.pi/4, 0]))
-                lower = np.array(rospy.get_param("lower", [8, -2, 3*np.pi/4, 2]))
-                initial_rand = np.random.rand(*upper.shape) * (upper - lower) + lower
+                if rospy.get_param("ENV_TYPE") == "coverage":
+                    lower = np.array(rospy.get_param("lower", [2, -4, np.pi/4, 0]))
+                    upper = np.array(rospy.get_param("upper", [8, -2, 3*np.pi/4, 2]))
+                    initial_rand = np.random.rand(*upper.shape) * (upper - lower) + lower
+                elif rospy.get_param("ENV_TYPE") == "drive":
+                    lower = np.array(rospy.get_param("lower", [6.35, 1.0, np.pi/2, 0]))
+                    upper = np.array(rospy.get_param("upper", [6.65, 2.0, np.pi/2, 2]))
+                    initial_rand = np.random.rand(*upper.shape) * (upper - lower) + lower
                 self.robot_state.pose.position.x = initial_rand[0]
                 self.robot_state.pose.position.y = initial_rand[1]
                 euler = [0, 0, initial_rand[2]]
@@ -84,13 +89,16 @@ class XboxTeleopSim:
             rate = rospy.Rate(100) #100 Hz
             while not rospy.is_shutdown():
                 self.control_pub.publish(self.control)
-                if self.reset_flag:
-                    trans = (self.robot_state.pose.position.x, self.robot_state.pose.position.y, self.robot_state.pose.position.z)
-                    rot = (self.robot_state.pose.orientation.x, self.robot_state.pose.orientation.y, self.robot_state.pose.orientation.z,  self.robot_state.pose.orientation.w)
-                    self.tf_broadcaster.sendTransform(trans, rot, rospy.Time.now(), 'robot', 'world')
                 rate.sleep()
 
 if __name__ == '__main__':
     tele = XboxTeleopSim()
     tele.run()
 
+
+
+
+# if self.reset_flag:
+#     trans = (self.robot_state.pose.position.x, self.robot_state.pose.position.y, self.robot_state.pose.position.z)
+#     rot = (self.robot_state.pose.orientation.x, self.robot_state.pose.orientation.y, self.robot_state.pose.orientation.z,  self.robot_state.pose.orientation.w)
+#     self.tf_broadcaster.sendTransform(trans, rot, rospy.Time.now(), 'robot', 'world')

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import rospy
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point, PoseStamped, Pose, Quaternion
@@ -25,7 +25,7 @@ def robot_marker(size):
 
     rm = Marker()
     rm.ns = "robot_body"
-    rm.header.frame_id = '/robot'
+    rm.header.frame_id = 'robot'
     rm.color.a = 1.0 # Don't forget to set the alpha!
     rm.color.r = rgb[0]
     rm.color.g = rgb[1]
@@ -44,6 +44,7 @@ def robot_marker(size):
 
     return rm
 
+
 def wheel_marker(size, front_back):
     rgb = [105./255, 105./255, 105./255]
     rm = Marker()
@@ -55,7 +56,7 @@ def wheel_marker(size, front_back):
         rm.pose.position.x = -LR
 
     rm.ns = "robot_wheels"
-    rm.header.frame_id = '/robot'
+    rm.header.frame_id = 'robot'
     rm.color.a = 1.0 # Don't forget to set the alpha!
     rm.color.r = rgb[0]
     rm.color.g = rgb[1]
@@ -90,7 +91,7 @@ class RobotVizualization(object):
         pose = Pose()
         pose.orientation.w = 1.0
         self.pose = PoseStamped(pose=pose)
-        self.pose.header.frame_id = '/robot'
+        self.pose.header.frame_id = 'robot'
         rospy.Subscriber("/robot/state", PoseTwistStamped, self.state_callback)
         rospy.Subscriber("/robot/control", Float32MultiArrayStamped, self.control_callback)
 
@@ -101,10 +102,10 @@ class RobotVizualization(object):
         self.speed.header.stamp = msg.header.stamp
         self.pub_speed.publish(self.speed)
 
-        self.pose.header.stamp = msg.header.stamp
-        euler = [0.0, 0.0, msg.twist.linear.y]
-        self.pose.pose.orientation = Quaternion(*tf.transformations.quaternion_from_euler(*euler))
-        self.pub_pose.publish(self.pose)
+        # self.pose.header.stamp = msg.header.stamp
+        # euler = [0.0, 0.0, msg.twist.linear.y]
+        # self.pose.pose.orientation = Quaternion(*tf.transformations.quaternion_from_euler(*euler))
+        # self.pub_pose.publish(self.pose)
 
     def control_callback(self, msg):
         if MODEL == "kinematic bicycle":
@@ -112,9 +113,9 @@ class RobotVizualization(object):
                 delta = msg.data.data[2] * DELTA_MAX
                 euler = [0.0, 0.0, delta]
                 self.control.markers[0].pose.orientation = Quaternion(*tf.transformations.quaternion_from_euler(*euler))
-                for m in self.control.markers:
-                    m.header.stamp = msg.header.stamp
-                self.pub_ctrl.publish(self.control)
+                # for m in self.control.markers:
+                #     m.header.stamp = msg.header.stamp
+                # self.pub_ctrl.publish(self.control)
 
     def run(self):
         rate = rospy.Rate(100)
@@ -122,7 +123,9 @@ class RobotVizualization(object):
             time_now = rospy.Time.now()
             self.marker.header.stamp = time_now
             self.pub.publish(self.marker)
-
+            for m in self.control.markers:
+                m.header.stamp = time_now
+            self.pub_ctrl.publish(self.control)
             rate.sleep()
 
 if __name__ == "__main__":
