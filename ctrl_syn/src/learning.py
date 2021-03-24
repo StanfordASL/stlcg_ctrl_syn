@@ -167,7 +167,7 @@ def generate_img_tensor(env, width=480, height=480, dpi=500, xlim=[-5,15], ylim=
     ax.axis('off')
     canvas.draw()
     X = np.concatenate([X, np.array(fig.canvas.renderer._renderer)[:,:,:1]/255], axis=-1)
-    
+
     return torch.tensor(X).permute(2,0,1).float()
 
 
@@ -280,18 +280,18 @@ def generate_env_from_parameters(case, p, carlength=1.2):
            "obstacles": [Circle([obs_x, 9.], 1.5)],
            "initial": Box([2, -4.],[8, -2]),
            "final": Circle([final_x, 13], 1.0)
-        } 
+        }
         return Environment(params)
 
     elif case == "drive":
         # car = [Box([5.2, p[0]], [5.8, p[0] + carlength]), Box([6.2, p[1]], [6.8, p[1] + carlength])]
         car = [Circle([5.5, p[0]], 0.5), Circle([6.5, p[1]], 0.5)]
-            
+
         params = { "covers": [],
                    "obstacles": [Box([-2,0], [5, 16]), Box([7,0], [14, 16])] + car,
                    "initial": Box([6.35, 0.0],[6.65, 1.0]),
                    "final": Box([6.35, 11.0],[6.65, 16.0])
-                } 
+                }
         return Environment(params)
 
 def standardize_data(x, mu, sigma):
@@ -599,8 +599,8 @@ def get_tl_elements(data, tls):
 
 
 
-                                                                     
-                                                                     
+
+
 #         CCCCCCCCCCCCCNNNNNNNN        NNNNNNNNNNNNNNNN        NNNNNNNN
 #      CCC::::::::::::CN:::::::N       N::::::NN:::::::N       N::::::N
 #    CC:::::::::::::::CN::::::::N      N::::::NN::::::::N      N::::::N
@@ -617,11 +617,11 @@ def get_tl_elements(data, tls):
 #    CC:::::::::::::::CN::::::N       N:::::::NN::::::N       N:::::::N
 #      CCC::::::::::::CN::::::N        N::::::NN::::::N        N::::::N
 #         CCCCCCCCCCCCCNNNNNNNN         NNNNNNNNNNNNNNN         NNNNNNN
-                                                                     
-                                                                     
-                                                                     
-                                                                     
-        
+
+
+
+
+
 
 
 
@@ -641,7 +641,7 @@ class STLCNNPolicy(torch.nn.Module):
         delta_lim_ = torch.tensor([dynamics.delta_min, dynamics.delta_max]).float().unsqueeze(0).unsqueeze(0)
         self.a_lim = standardize_data(a_lim_, stats[0][:,:,4:5], stats[1][:,:,4:5])
         self.delta_lim = standardize_data(delta_lim_, stats[0][:,:,5:], stats[1][:,:,5:])
-        
+
         self.cnn = torch.nn.Sequential(torch.nn.Conv2d(in_channels=4, out_channels=4, kernel_size=8, padding=4, stride=4),
                                        torch.nn.BatchNorm2d(4),
                                        torch.nn.ReLU(),
@@ -650,12 +650,12 @@ class STLCNNPolicy(torch.nn.Module):
 
 
         self.lstm = torch.nn.LSTM(self.state_dim, hidden_dim, num_layers, dropout=dropout, batch_first=True)
-        # self.proj = torch.nn.Sequential(torch.nn.Linear(hidden_dim, dynamics.ctrl_dim), 
-        #                                 torch.nn.Tanh())
-        self.proj = torch.nn.Sequential(torch.nn.Linear(hidden_dim, hidden_dim),
-                                        torch.nn.ReLU(),
-                                        torch.nn.Linear(hidden_dim, dynamics.ctrl_dim), 
+        self.proj = torch.nn.Sequential(torch.nn.Linear(hidden_dim, dynamics.ctrl_dim),
                                         torch.nn.Tanh())
+        # self.proj = torch.nn.Sequential(torch.nn.Linear(hidden_dim, hidden_dim),
+        #                                 torch.nn.ReLU(),
+        #                                 torch.nn.Linear(hidden_dim, dynamics.ctrl_dim),
+        #                                 torch.nn.Tanh())
         self.initialize_rnn_h = torch.nn.Sequential(torch.nn.Linear(8 * 8 + self.state_dim, hidden_dim),
                                                     torch.nn.Tanh(),
                                                     torch.nn.Linear(hidden_dim, hidden_dim),
@@ -769,14 +769,14 @@ class STLCNNPolicy(torch.nn.Module):
                 h0 = (h0_[0].repeat(1, bs, 1), h0_[1].repeat(1, bs, 1))
             else:
                 h0 = h0_
-        
+
 
         x_future = []
         u_future = []
         x_prev = x_partial[:,-1:,:]    # [bs, 1, state_dim]
         o, h = self.lstm(x_prev, h0)    # h is the last hidden state/last output
         # get last state, as that is the input to compute the first step of the n steps
-        
+
 
         for i in range(n):
             u_ = self.proj(o[:,-1:,:])    # [bs, 1, ctrl_dim]
@@ -838,10 +838,10 @@ class STLCNNPolicy(torch.nn.Module):
             o, u, _, _ = self.forward(x_input, imgs, h0=h0)
             us.append(u)
             uu = torch.cat(us, time_dim)
-            
+
             d = (xx - x_true).pow(2).cumsum(1).mean(-1, keepdims=True)
             recon_state_loss = get_tl_elements(d, tls).mean()
-            
+
             d = (uu - u_true).pow(2).cumsum(1).mean(-1, keepdims=True)
             recon_ctrl_loss = get_tl_elements(d, tls).mean()
             return recon_state_loss, recon_ctrl_loss, xx, uu
