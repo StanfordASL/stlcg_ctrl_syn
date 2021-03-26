@@ -1,4 +1,4 @@
-Code accompanying "Adaptive Trajectory-feedback Control with Signal Temporal Logic Specifications" by Karen Leung and Marco Pavone
+Code accompanying "Control Synthesis with Heterogeneous Structure: Imitation-based Trajectory-feedback Control with Signal Temporal Logic Specifications  " by Karen Leung and Marco Pavone
 
 More documentation to come.
 
